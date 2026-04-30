@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>유가 대시보드</title>
+  <link rel="stylesheet" href="style.css"/>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet"/>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-emblem">HD</span>
+        <span class="logo-text">OIL<em>WATCH</em></span>
+      </div>
+      <div class="header-meta">
+        <span class="update-label">최종 업데이트</span>
+        <span id="lastUpdated" class="update-time">--</span>
+        <button class="refresh-btn" id="refreshBtn" title="새로고침">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6"/>
+            <path d="M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- HERO TICKER -->
+  <div class="ticker-wrap">
+    <div class="ticker-label">LIVE</div>
+    <div class="ticker-track" id="tickerTrack">
+      <div class="ticker-inner" id="tickerInner">
+        <span class="tick-item">WTI <b id="t-wti">-</b></span>
+        <span class="tick-sep">|</span>
+        <span class="tick-item">Brent <b id="t-brent">-</b></span>
+        <span class="tick-sep">|</span>
+        <span class="tick-item">Dubai <b id="t-dubai">-</b></span>
+        <span class="tick-sep">|</span>
+        <span class="tick-item">휘발유 <b id="t-gasoline">-</b></span>
+        <span class="tick-sep">|</span>
+        <span class="tick-item">경유 <b id="t-diesel">-</b></span>
+        <span class="tick-sep">|</span>
+        <span class="tick-item">등유 <b id="t-kerosene">-</b></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN GRID -->
+  <main class="main-grid">
+
+    <!-- SECTION 1: 국제유가 (전폭) -->
+    <section class="card card--full" id="sec-international">
+      <div class="card-header">
+        <span class="card-tag">INTERNATIONAL</span>
+        <h2 class="card-title">국제유가</h2>
+        <span class="card-unit">USD/배럴 · NYMEX/DME (네이버 금융)</span>
+      </div>
+      <div class="card-body">
+        <div class="price-grid price-grid--3" id="intlPriceGrid">
+          <div class="price-block skeleton">
+            <div class="price-block__label">WTI유</div>
+            <div class="price-block__value" id="wti-val">—</div>
+            <div class="price-block__change" id="wti-chg">—</div>
+            <div class="price-block__rate" id="wti-rate">—</div>
+            <div class="price-block__date" id="wti-date">—</div>
+          </div>
+          <div class="price-block skeleton">
+            <div class="price-block__label">Brent유</div>
+            <div class="price-block__value" id="brent-val">—</div>
+            <div class="price-block__change" id="brent-chg">—</div>
+            <div class="price-block__rate" id="brent-rate">—</div>
+            <div class="price-block__date" id="brent-date">—</div>
+          </div>
+          <div class="price-block skeleton">
+            <div class="price-block__label">Dubai유</div>
+            <div class="price-block__value" id="dubai-val">—</div>
+            <div class="price-block__change" id="dubai-chg">—</div>
+            <div class="price-block__rate" id="dubai-rate">—</div>
+            <div class="price-block__date" id="dubai-date">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 2: 국내유가 -->
+    <section class="card card--wide" id="sec-station">
+      <div class="card-header">
+        <span class="card-tag">DOMESTIC</span>
+        <h2 class="card-title">국내유가</h2>
+        <span class="card-unit">원/L · 한국석유공사 Opinet (네이버 금융)</span>
+      </div>
+      <div class="card-body">
+        <div class="station-grid" id="stationGrid">
+          <div class="station-block skeleton">
+            <div class="station-block__label">휘발유</div>
+            <div class="station-block__value" id="sta-gas">—</div>
+            <div class="station-block__change" id="sta-gas-chg">—</div>
+            <div class="station-block__rate" id="sta-gas-rate">—</div>
+            <div class="station-block__date" id="sta-gas-date">—</div>
+          </div>
+          <div class="station-block skeleton">
+            <div class="station-block__label">고급휘발유</div>
+            <div class="station-block__value" id="sta-premium">—</div>
+            <div class="station-block__change" id="sta-premium-chg">—</div>
+            <div class="station-block__rate" id="sta-premium-rate">—</div>
+            <div class="station-block__date" id="sta-premium-date">—</div>
+          </div>
+          <div class="station-block skeleton">
+            <div class="station-block__label">경유</div>
+            <div class="station-block__value" id="sta-diesel">—</div>
+            <div class="station-block__change" id="sta-diesel-chg">—</div>
+            <div class="station-block__rate" id="sta-diesel-rate">—</div>
+            <div class="station-block__date" id="sta-diesel-date">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 3: 환율 -->
+    <section class="card" id="sec-forex">
+      <div class="card-header">
+        <span class="card-tag">FOREX</span>
+        <h2 class="card-title">환율</h2>
+        <span class="card-unit">하나은행 기준</span>
+      </div>
+      <div class="card-body">
+        <div class="forex-list">
+          <div class="forex-row skeleton">
+            <span class="forex-badge">USD</span>
+            <span class="forex-label">미국 달러</span>
+            <div class="forex-right">
+              <span class="forex-val" id="fx-usd-val">—</span>
+              <span class="forex-chg" id="fx-usd-chg">—</span>
+            </div>
+          </div>
+          <div class="forex-row skeleton">
+            <span class="forex-badge">EUR</span>
+            <span class="forex-label">유로</span>
+            <div class="forex-right">
+              <span class="forex-val" id="fx-eur-val">—</span>
+              <span class="forex-chg" id="fx-eur-chg">—</span>
+            </div>
+          </div>
+          <div class="forex-row skeleton">
+            <span class="forex-badge">JPY</span>
+            <span class="forex-label">엔화 <small>100엔</small></span>
+            <div class="forex-right">
+              <span class="forex-val" id="fx-jpy-val">—</span>
+              <span class="forex-chg" id="fx-jpy-chg">—</span>
+            </div>
+          </div>
+          <div class="forex-row skeleton">
+            <span class="forex-badge">CNY</span>
+            <span class="forex-label">위안화</span>
+            <div class="forex-right">
+              <span class="forex-val" id="fx-cny-val">—</span>
+              <span class="forex-chg" id="fx-cny-chg">—</span>
+            </div>
+          </div>
+        </div>
+        <p class="forex-date" id="fx-date">—</p>
+      </div>
+    </section>
+
+    <!-- SECTION 4: 석유제품가 -->
+    <section class="card card--wide" id="sec-domestic">
+      <div class="card-header">
+        <span class="card-tag">PRODUCT PRICE</span>
+        <h2 class="card-title">석유제품가</h2>
+        <span class="card-unit">단위: 원/L (싱가포르 현물 기준)</span>
+      </div>
+      <div class="card-body">
+        <div class="table-wrapper">
+          <table class="data-table" id="domesticTable">
+            <thead>
+              <tr>
+                <th>구분</th>
+                <th>휘발유 (92RON)</th>
+                <th>등유</th>
+                <th>경유 (10ppm)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="skeleton-row">
+                <td>당일</td>
+                <td id="dom-gas-today">—</td>
+                <td id="dom-kero-today">—</td>
+                <td id="dom-diesel-today">—</td>
+              </tr>
+              <tr class="skeleton-row">
+                <td>전일</td>
+                <td id="dom-gas-prev">—</td>
+                <td id="dom-kero-prev">—</td>
+                <td id="dom-diesel-prev">—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 5: 주유소 평균판매가 -->
+    <section class="card" id="sec-product">
+      <div class="card-header">
+        <span class="card-tag">GAS STATION AVG</span>
+        <h2 class="card-title">주유소 평균판매가</h2>
+        <span class="card-unit">단위: 원/L</span>
+      </div>
+      <div class="card-body">
+        <div class="product-grid" id="productGrid">
+          <div class="product-card skeleton">
+            <div class="product-label">고급휘발유</div>
+            <div class="product-val" id="prod-premium">—</div>
+            <div class="product-chg" id="prod-premium-chg">—</div>
+          </div>
+          <div class="product-card skeleton">
+            <div class="product-label">보통휘발유</div>
+            <div class="product-val" id="prod-regular">—</div>
+            <div class="product-chg" id="prod-regular-chg">—</div>
+          </div>
+          <div class="product-card skeleton">
+            <div class="product-label">실내등유</div>
+            <div class="product-val" id="prod-kerosene">—</div>
+            <div class="product-chg" id="prod-kerosene-chg">—</div>
+          </div>
+          <div class="product-card skeleton">
+            <div class="product-label">자동차경유</div>
+            <div class="product-val" id="prod-diesel">—</div>
+            <div class="product-chg" id="prod-diesel-chg">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 7: 공장도가 -->
+    <section class="card card--full" id="sec-factory">
+      <div class="card-header">
+        <span class="card-tag">FACTORY PRICE</span>
+        <h2 class="card-title">공장도가 <small id="factoryWeek">2026년 4월 5주차</small></h2>
+        <span class="card-unit">단위: 원/L (경질유)</span>
+      </div>
+      <div class="card-body">
+        <div class="factory-tabs">
+          <button class="ftab active" data-company="sk">SK에너지</button>
+          <button class="ftab" data-company="gs">GS칼텍스</button>
+          <button class="ftab" data-company="hyundai">현대오일뱅크</button>
+          <button class="ftab" data-company="soil">S-OIL</button>
+          <button class="ftab" data-company="hanwha">한화토탈</button>
+        </div>
+        <div class="factory-display" id="factoryDisplay">
+          <div class="factory-item">
+            <span class="fi-label">휘발유</span>
+            <span class="fi-val" id="fact-gasoline">—</span>
+          </div>
+          <div class="factory-item">
+            <span class="fi-label">등유</span>
+            <span class="fi-val" id="fact-kerosene">—</span>
+          </div>
+          <div class="factory-item">
+            <span class="fi-label">경유</span>
+            <span class="fi-val" id="fact-diesel">—</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+
+  <script src="app.js"></script>
+</body>
+</html>
