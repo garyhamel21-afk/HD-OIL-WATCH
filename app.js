@@ -78,6 +78,8 @@ function chgStr(v, prefix = '') {
   return `${sign} ${prefix}${Math.abs(v).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+const round2 = (n) => Math.round(n * 100) / 100;
+
 function setEl(id, text, cls = '') {
   const el = $(id);
   if (!el) return;
@@ -241,14 +243,7 @@ async function fetchNaverStation() {
     try {
       const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(12000) });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      const ct = res.headers.get('content-type') || '';
-      let html;
-      if (ct.includes('json')) {
-        const j = await res.json();
-        html = j.contents ?? j;
-      } else {
-        html = await res.text();
-      }
+      const html = await proxyText(res);
       const { domestic, intl } = parseNaverOilPrices(html);
       if (domestic > 0) { renderStation();        console.log('[OilWatch] 국내유가 갱신:', domestic, '건'); }
       if (intl     > 0) { renderInternational();  console.log('[OilWatch] 국제유가 갱신:', intl, '건'); }
@@ -322,10 +317,136 @@ function parseNaverOilPrices(html) {
    메인 페이지는 서버사이드 렌더링으로 환율 포함
    proxy 2개 순차 시도
 ──────────────────────────────────────────── */
+// 프록시 우선순위:
+// 1. /api/proxy  — 자체 Vercel 서버리스 (raw 응답, 가장 안정적)
+// 2. allorigins  — JSON {contents:"..."} 래퍼
+// 3. corsproxy   — raw 응답 (폴백)
 const FX_PROXIES = [
+  (u) => `/api/proxy?url=${encodeURIComponent(u)}`,
   (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
   (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
 ];
+
+// 프록시 응답에서 실제 HTML/텍스트를 추출
+// - /api/proxy, corsproxy.io → raw body (content-type 그대로)
+// - allorigins.win           → JSON { contents: "..." }
+async function proxyText(res) {
+  const ct = res.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    const j = await res.json();
+    return typeof j.contents === 'string' ? j.contents : JSON.stringify(j);
+  }
+  return res.text();
+}
+
+/* ────────────────────────────────────────────
+   FETCH — 환율 (jsDelivr CDN currency-api, CORS 허용, API키 불필요)
+   오늘/전일 두 번 호출 → 전일 대비 등락 계산
+──────────────────────────────────────────── */
+async function fetchForexAPI() {
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+  // CDN 미러 2개 순차 시도 (jsDelivr → Cloudflare Pages)
+  const CDN_MIRRORS = [
+    (tag) => `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${tag}/v1/currencies/usd.min.json`,
+    (tag) => `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${tag}/v1/currencies/usd.json`,
+    (tag) => `https://latest.currency-api.pages.dev/v1/currencies/usd.min.json`.replace('latest', tag === 'latest' ? 'latest' : tag),
+  ];
+
+  for (const makeCdnUrl of CDN_MIRRORS) {
+    try {
+      const [todayRes, yestRes] = await Promise.all([
+        fetch(makeCdnUrl('latest'),    { signal: AbortSignal.timeout(10000) }),
+        fetch(makeCdnUrl(yesterday),   { signal: AbortSignal.timeout(10000) }),
+      ]);
+      if (!todayRes.ok) throw new Error('today HTTP ' + todayRes.status);
+
+      const todayData = await todayRes.json();
+      const yestData  = yestRes.ok ? await yestRes.json() : null;
+
+      const t = todayData.usd;
+      if (!t?.krw) throw new Error('no KRW data in response');
+      const y = yestData?.usd;
+
+      const calc = (todayVal, yestVal) => ({
+        val: round2(todayVal),
+        chg: (y && yestVal) ? round2(todayVal - yestVal) : null,
+      });
+
+      state.forex = {
+        usd: calc(t.krw,                   y?.krw),
+        eur: calc(t.krw / t.eur,           y ? y.krw / y.eur  : null),
+        jpy: calc((t.krw / t.jpy) * 100,  y ? (y.krw / y.jpy) * 100 : null),
+        cny: calc(t.krw / t.cny,          y ? y.krw / y.cny  : null),
+      };
+
+      forexDate = (todayData.date || '').replace(/-/g, '.') + ' currency-api 기준';
+      renderForex();
+      console.log('[OilWatch] 환율 API 갱신 (currency-api)');
+      return true;
+    } catch (e) {
+      console.warn('[OilWatch] 환율 API 실패:', e.message);
+    }
+  }
+  return false;
+}
+
+/* ────────────────────────────────────────────
+   FETCH — 국제유가 (Yahoo Finance JSON, CORS 프록시 경유)
+   HTML 스크래핑보다 JSON 파싱이 훨씬 안정적
+──────────────────────────────────────────── */
+async function fetchOilYahoo() {
+  const TICKERS = [
+    { symbol: 'CL=F', key: 'wti',   label: 'WTI'   },
+    { symbol: 'BZ=F', key: 'brent', label: 'Brent' },
+  ];
+
+  let updated = 0;
+
+  for (const { symbol, key, label } of TICKERS) {
+    const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d`;
+
+    for (const makeProxy of FX_PROXIES) {
+      try {
+        const res = await fetch(makeProxy(yahooUrl), { signal: AbortSignal.timeout(12000) });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+
+        // proxyText로 문자열을 받은 뒤 JSON 파싱
+        // allorigins 래퍼({contents:"..."}) 처리는 proxyText 내부에서 완료
+        const rawText = await proxyText(res);
+        let chartData;
+        try { chartData = JSON.parse(rawText); }
+        catch { throw new Error('JSON parse failed'); }
+
+        const result = chartData?.chart?.result?.[0];
+        if (!result?.meta) throw new Error('no chart result');
+
+        const price    = result.meta.regularMarketPrice;
+        const prevClose = result.meta.previousClose ?? result.meta.chartPreviousClose;
+        if (!price) throw new Error('no price');
+
+        const chg  = prevClose ? round2(price - prevClose) : null;
+        const rate = prevClose ? (((price - prevClose) / prevClose) * 100).toFixed(2) + '%' : null;
+        const ts   = result.meta.regularMarketTime;
+        const date = ts
+          ? new Date(ts * 1000).toLocaleDateString('ko-KR', {
+              year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Seoul',
+            }).replace(/\.\s*/g, '.').replace(/\.$/, '')
+          : null;
+
+        state.international[key] = { val: round2(price), chg, rate, date };
+        updated++;
+        console.log(`[OilWatch] ${label} Yahoo 갱신: $${price}`);
+        break;
+      } catch (e) {
+        console.warn(`[OilWatch] ${label} Yahoo 실패:`, e.message);
+      }
+    }
+  }
+
+  if (updated > 0) renderInternational();
+  return updated;
+}
 
 async function fetchForex() {
   // finance.naver.com/ 메인 페이지는 환율 테이블이 SSR로 포함됨
@@ -336,17 +457,7 @@ async function fetchForex() {
     try {
       const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(12000) });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-
-      // allorigins → { contents: "..." }, corsproxy.io → plain HTML
-      let html;
-      const ct = res.headers.get('content-type') || '';
-      if (ct.includes('json')) {
-        const j = await res.json();
-        html = j.contents ?? j;
-      } else {
-        html = await res.text();
-      }
-
+      const html = await proxyText(res);
       const found = parseNaverForex(html);
       if (found) {
         renderForex();
@@ -440,24 +551,25 @@ function tryExtractRow(row, nameText, TARGETS, collected, onFound) {
 }
 
 /* ────────────────────────────────────────────
-   FETCH — CORS proxy approach
-   Tries allorigins.win (free CORS proxy) first,
-   then falls back to seed data.
+   FETCH — samhwa.biz (CORS proxy 순차 시도)
 ──────────────────────────────────────────── */
-const PROXY = 'https://api.allorigins.win/get?url=';
-const TARGET = encodeURIComponent('https://www.samhwa.biz/');
-
 async function fetchSamhwa() {
-  try {
-    const res = await fetch(PROXY + TARGET, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) throw new Error('proxy ' + res.status);
-    const json = await res.json();
-    parseAndApply(json.contents);
-    return true;
-  } catch (e) {
-    console.warn('[OilWatch] Fetch failed:', e.message, '— using seed data');
-    return false;
+  const samhwaUrl = 'https://www.samhwa.biz/';
+  for (const makeProxy of FX_PROXIES) {
+    const proxyUrl = makeProxy(samhwaUrl);
+    try {
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(12000) });
+      if (!res.ok) throw new Error('proxy ' + res.status);
+      const html = await proxyText(res);
+      parseAndApply(html);
+      console.log('[OilWatch] samhwa 갱신 (' + proxyUrl.slice(0, 40) + '...)');
+      return true;
+    } catch (e) {
+      console.warn('[OilWatch] samhwa fetch 실패:', e.message);
+    }
   }
+  console.warn('[OilWatch] samhwa 전체 실패 — seed 유지');
+  return false;
 }
 
 /* ────────────────────────────────────────────
@@ -531,12 +643,9 @@ function parseAndApply(html) {
   });
 
   if (changed) {
-    // samhwa 전담: 석유제품가·주유소평균판매가·공장도가만 갱신
-    // 국제유가·국내유가는 네이버 금융이 담당하므로 건드리지 않음
     renderDomestic();
     renderProduct();
     renderFactory(activeCompany);
-    updateTimestamp();
     console.log('[OilWatch] Data refreshed from samhwa.biz');
   }
 }
@@ -583,8 +692,12 @@ const refreshBtn = $('refreshBtn');
 refreshBtn.addEventListener('click', async () => {
   refreshBtn.classList.add('spinning');
   refreshBtn.disabled = true;
-  await Promise.all([fetchSamhwa(), fetchForex(), fetchNaverStation()]);
-  updateTimestamp();
+  await Promise.all([
+    fetchSamhwa(),
+    fetchForexAPI().then(ok => ok ? null : fetchForex()),
+    fetchOilYahoo().then(n => n < 2 ? fetchNaverStation() : null),
+  ]);
+  renderAll();
   setTimeout(() => {
     refreshBtn.classList.remove('spinning');
     refreshBtn.disabled = false;
@@ -595,8 +708,14 @@ refreshBtn.addEventListener('click', async () => {
    AUTO REFRESH (every 5 minutes)
 ──────────────────────────────────────────── */
 async function autoRefresh() {
-  await Promise.all([fetchSamhwa(), fetchForex(), fetchNaverStation()]);
-  updateTimestamp();
+  await Promise.all([
+    fetchSamhwa(),
+    // 환율: CDN API 우선, 실패 시 네이버 스크래핑 폴백
+    fetchForexAPI().then(ok => ok ? null : fetchForex()),
+    // 국제유가: Yahoo Finance JSON 우선, 실패 시 네이버 스크래핑 폴백
+    fetchOilYahoo().then(n => n < 2 ? fetchNaverStation() : null),
+  ]);
+  renderAll();
 }
 
 /* ────────────────────────────────────────────
@@ -606,11 +725,14 @@ async function autoRefresh() {
   // 1. Render seed data immediately (no flicker)
   renderAll();
 
-  // 2. Attempt live fetch
-  // 각 fetch는 내부에서 자신의 state만 갱신 + 렌더를 호출하므로
-  // Promise.all 완료 후 추가 renderAll 불필요 (중복 덮어쓰기 방지)
+  // 2. Live fetch: 공개 API 우선, 실패 시 CORS 프록시 스크래핑 폴백
   fetchAttempted = true;
-  await Promise.all([fetchSamhwa(), fetchForex(), fetchNaverStation()]);
+  await Promise.all([
+    fetchSamhwa(),
+    fetchForexAPI().then(ok => ok ? null : fetchForex()),
+    fetchOilYahoo().then(n => n < 2 ? fetchNaverStation() : null),
+  ]);
+  renderAll();
 
   // 3. Auto refresh every 5 min
   setInterval(autoRefresh, 5 * 60 * 1000);
