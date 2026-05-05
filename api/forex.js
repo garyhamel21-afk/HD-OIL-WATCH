@@ -10,12 +10,13 @@
  * { usd: { val: 1472.0, chg: -3.5 }, eur: {...}, jpy: {...}, cny: {...}, date: "2026.05.05" }
  */
 
-// 통화별 항목코드
+// 통화별 항목코드 (731Y001 기준)
+// JPY: BOK가 이미 100엔 기준으로 제공 → multiplier 불필요
 const CURRENCY_ITEMS = [
-  { id: 'usd', code: '0000001', label: 'USD', multiplier: 1    },
-  { id: 'jpy', code: '0000002', label: 'JPY', multiplier: 100  }, // 100엔 기준
-  { id: 'eur', code: '0000003', label: 'EUR', multiplier: 1    },
-  { id: 'cny', code: '0000053', label: 'CNY', multiplier: 1    },
+  { id: 'usd', code: '0000001', label: 'USD' },
+  { id: 'jpy', code: '0000002', label: 'JPY' }, // 원/100엔 (BOK 이미 100엔 기준)
+  { id: 'eur', code: '0000003', label: 'EUR' },
+  { id: 'cny', code: '0000053', label: 'CNY' },
 ];
 
 function toDateStr(d) {
@@ -44,11 +45,11 @@ export default async function handler(req, res) {
 
   try {
     // 4개 통화 병렬 조회
-    const results = await Promise.all(
-      CURRENCY_ITEMS.map(async ({ id, code, label, multiplier }) => {
+    const settled = await Promise.allSettled(
+      CURRENCY_ITEMS.map(async ({ id, code, label }) => {
         const url =
           `https://ecos.bok.or.kr/api/StatisticSearch` +
-          `/${apiKey}/json/kr/1/10/731Y001/DD/${start}/${end}/${code}`;
+          `/${apiKey}/json/kr/1/10/731Y001/D/${start}/${end}/${code}`;
 
         const r = await fetch(url, {
           headers: { Accept: 'application/json' },
@@ -66,14 +67,27 @@ export default async function handler(req, res) {
 
         if (rows.length === 0) throw new Error(`데이터 없음 (${label})`);
 
-        const latest   = parseFloat(rows[0].DATA_VALUE) * multiplier;
-        const prev     = rows.length > 1 ? parseFloat(rows[1].DATA_VALUE) * multiplier : null;
-        const chg      = prev != null ? Math.round((latest - prev) * 100) / 100 : null;
-        const dateStr  = rows[0].TIME.replace(/(\d{4})(\d{2})(\d{2})/, '$1.$2.$3');
+        const latest  = parseFloat(rows[0].DATA_VALUE);
+        const prev    = rows.length > 1 ? parseFloat(rows[1].DATA_VALUE) : null;
+        const chg     = prev != null ? Math.round((latest - prev) * 100) / 100 : null;
+        const dateStr = rows[0].TIME.replace(/(\d{4})(\d{2})(\d{2})/, '$1.$2.$3');
 
         return { id, val: Math.round(latest * 100) / 100, chg, date: dateStr };
       })
     );
+
+    // 실패한 통화 로깅, 성공한 통화만 사용
+    const results = settled
+      .filter((s, i) => {
+        if (s.status === 'rejected') {
+          console.error(`[forex] ${CURRENCY_ITEMS[i].label} 실패:`, s.reason?.message);
+          return false;
+        }
+        return true;
+      })
+      .map(s => s.value);
+
+    if (results.length === 0) throw new Error('모든 통화 조회 실패');
 
     // 최신 날짜 (USD 기준)
     const latestDate = results.find(r => r.id === 'usd')?.date ?? end.replace(/(\d{4})(\d{2})(\d{2})/, '$1.$2.$3');
