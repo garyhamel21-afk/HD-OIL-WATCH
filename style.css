@@ -726,3 +726,90 @@ body {
   .product-grid    { grid-template-columns: 1fr; }
   .ticker-inner    { animation-duration: 25s; }
 }
+
+/* ──────────────── STATUS BADGE ──────────────── */
+.status-badge {
+  margin-left: auto;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #F4F6F9;
+  color: var(--text-muted);
+  align-self: center;
+  white-space: nowrap;
+}
+.status-badge.status-live {
+  color: #007A2C;
+  border-color: rgba(0, 177, 64, 0.35);
+  background: rgba(0, 177, 64, 0.10);
+}
+.status-badge.status-stale {
+  color: #B43030;
+  border-color: rgba(180, 48, 48, 0.35);
+  background: rgba(180, 48, 48, 0.08);
+  cursor: help;
+}
+.status-badge.status-pending {
+  color: var(--text-muted);
+}
+
+/* ──────────────── STATUS BADGE ──────────────── */
+.status-badge {
+  margin-left: auto;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #F4F6F9;
+  color: var(--text-muted);
+  align-self: center;
+  white-space: nowrap;
+}
+.status-badge.status-live {
+  color: #007A2C;
+  border-color: rgba(0, 177, 64, 0.35);
+  background: rgba(0, 177, 64, 0.10);
+}
+.status-badge.status-stale {
+  color: #B43030;
+  border-color: rgba(180, 48, 48, 0.35);
+  background: rgba(180, 48, 48, 0.08);
+  cursor: help;
+}
+.status-badge.status-pending {
+  color: var(--text-muted);
+}
+
+/* ──────────────── STATUS BADGE ──────────────── */
+.status-badge {
+  margin-left: auto;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #F4F6F9;
+  color: var(--text-muted);
+  align-self: center;
+  white-space: nowrap;
+}
+.status-badge.status-live {
+  color: #007A2C;
+  border-color: rgba(0, 177, 64, 0.35);
+  background: rgba(0, 177, 64, 0.10);
+}
+.status-badge.status-stale {
+  color: #B43030;
+  border-color: rgba(180, 48, 48, 0.35);
+  background: rgba(180, 48, 48, 0.08);
+  cursor: help;
+}
+.status-badge.status-pending {
+  color: var(--text-muted);
+}

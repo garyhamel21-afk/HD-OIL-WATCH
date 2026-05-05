@@ -60,6 +60,16 @@ let activeCompany = 'sk';
 let fetchAttempted = false;
 let forexDate = null; // 하나은행 기준 시각 문자열
 
+// 각 데이터 소스의 fetch 상태 추적 (UI에 표시용)
+const fetchStatus = {
+  international: 'pending', // pending | live | stale
+  station:       'pending',
+  forex:         'pending',
+  domestic:      'pending',
+  product:       'pending',
+  factory:       'pending',
+};
+
 /* ────────────────────────────────────────────
    HELPERS
 ──────────────────────────────────────────── */
@@ -245,15 +255,24 @@ async function fetchNaverStation() {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const html = await proxyText(res);
       const { domestic, intl } = parseNaverOilPrices(html);
-      if (domestic > 0) { renderStation();        console.log('[OilWatch] 국내유가 갱신:', domestic, '건'); }
-      if (intl     > 0) { renderInternational();  console.log('[OilWatch] 국제유가 갱신:', intl, '건'); }
-      if (domestic > 0 || intl > 0) return;
+      if (domestic > 0) {
+        renderStation();
+        markLive(['station']);
+        console.log('[OilWatch] 국내유가 갱신:', domestic, '건');
+      }
+      if (intl > 0) {
+        renderInternational();
+        markLive(['international']);
+        console.log('[OilWatch] 국제유가 갱신:', intl, '건');
+      }
+      if (domestic > 0 || intl > 0) return true;
       console.warn('[OilWatch] 유가 파싱 결과 없음 — 다음 proxy');
     } catch (e) {
       console.warn('[OilWatch] 유가 fetch 실패:', e.message);
     }
   }
-  console.warn('[OilWatch] 유가 전체 실패 — seed 유지');
+  console.warn('[OilWatch] 네이버 유가 전체 실패');
+  return false;
 }
 
 function parseNaverOilPrices(html) {
@@ -266,11 +285,10 @@ function parseNaverOilPrices(html) {
     'OIL_HGSL': 'premium',  'OIL%5FHGSL': 'premium',
     'OIL_LO':   'diesel',   'OIL%5FLO':   'diesel',
   };
-  // 국제 유종 (달러/배럴)
+  // 국제 유종 (달러/배럴) — Dubai는 FRED API 전담이므로 여기서 제외
   const INTL_MAP = {
     'OIL_CL':  'wti',   'OIL%5FCL':  'wti',    // WTI 서부텍사스유
     'OIL_BRT': 'brent', 'OIL%5FBRT': 'brent',  // 브렌트유
-    'OIL_DU':  'dubai', 'OIL%5FDU':  'dubai',  // 두바이유
   };
 
   let domestic = 0, intl = 0;
@@ -317,6 +335,14 @@ function parseNaverOilPrices(html) {
    메인 페이지는 서버사이드 렌더링으로 환율 포함
    proxy 2개 순차 시도
 ──────────────────────────────────────────── */
+// FRED API Key — https://fred.stlouisfed.org/docs/api/api_key.html 에서 무료 발급
+// Dubai유 (DCOILDUBBI) 시리즈 조회에 사용됩니다.
+const FRED_API_KEY = 'f82e656deed89f39fac46114b4d6a2a9';
+
+// Opinet API Key — https://www.opinet.co.kr/user/custapi/custApiGruide.do 에서 무료 발급
+// 국내유가(station) + 주유소 평균판매가(product) 조회에 사용됩니다.
+const OPINET_API_KEY = 'F251010901';
+
 // 프록시 우선순위:
 // 1. /api/proxy  — 자체 Vercel 서버리스 (raw 응답, 가장 안정적)
 // 2. allorigins  — JSON {contents:"..."} 래퍼
@@ -382,6 +408,7 @@ async function fetchForexAPI() {
 
       forexDate = (todayData.date || '').replace(/-/g, '.') + ' currency-api 기준';
       renderForex();
+      markLive(['forex']);
       console.log('[OilWatch] 환율 API 갱신 (currency-api)');
       return true;
     } catch (e) {
@@ -392,10 +419,56 @@ async function fetchForexAPI() {
 }
 
 /* ────────────────────────────────────────────
-   FETCH — 국제유가 (Yahoo Finance JSON, CORS 프록시 경유)
-   HTML 스크래핑보다 JSON 파싱이 훨씬 안정적
+   FETCH — 국제유가 (Stooq CSV 1차, Yahoo JSON 폴백)
+   ─ stooq.com 은 CORS 허용 + CSV 형식 → 가장 안정적
+   ─ Yahoo 는 종종 401/Crumb 요구하므로 프록시 경유
 ──────────────────────────────────────────── */
+async function fetchOilStooq() {
+  // Stooq 심볼: CL.F = WTI, BZ.F = Brent (모두 CORS 허용)
+  const TICKERS = [
+    { symbol: 'cl.f', key: 'wti',   label: 'WTI' },
+    { symbol: 'bz.f', key: 'brent', label: 'Brent' },
+  ];
+  let updated = 0;
+  for (const { symbol, key, label } of TICKERS) {
+    try {
+      const url = `https://stooq.com/q/l/?s=${symbol}&f=sd2t2ohlcv&h&e=csv`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const csv = await res.text();
+      const lines = csv.trim().split('\n');
+      if (lines.length < 2) throw new Error('empty CSV');
+      const cols = lines[1].split(',');
+      // Symbol,Date,Time,Open,High,Low,Close,Volume
+      const date  = cols[1];
+      const open  = parseFloat(cols[3]);
+      const close = parseFloat(cols[6]);
+      if (isNaN(close)) throw new Error('parse failed');
+      const chg  = !isNaN(open) ? round2(close - open) : null;
+      const rate = !isNaN(open) && open ? (((close - open) / open) * 100).toFixed(2) + '%' : null;
+      state.international[key] = {
+        val: round2(close), chg, rate,
+        date: date ? date.replace(/-/g, '.') : null,
+      };
+      updated++;
+      console.log(`[OilWatch] ${label} Stooq 갱신: $${close}`);
+    } catch (e) {
+      console.warn(`[OilWatch] ${label} Stooq 실패:`, e.message);
+    }
+  }
+  if (updated > 0) {
+    renderInternational();
+    if (updated >= 2) markLive(['international']);
+  }
+  return updated;
+}
+
 async function fetchOilYahoo() {
+  // 1차 Stooq 시도
+  const stooqCount = await fetchOilStooq();
+  if (stooqCount >= 2) return stooqCount;
+
+  // 2차 Yahoo 폴백
   const TICKERS = [
     { symbol: 'CL=F', key: 'wti',   label: 'WTI'   },
     { symbol: 'BZ=F', key: 'brent', label: 'Brent' },
@@ -444,8 +517,151 @@ async function fetchOilYahoo() {
     }
   }
 
-  if (updated > 0) renderInternational();
+  if (updated > 0) {
+    renderInternational();
+    markLive(['international']);
+  }
   return updated;
+}
+
+/* ────────────────────────────────────────────
+   FETCH — 두바이유 (FRED St. Louis Fed API)
+   Series: DCOILDUBBI — Crude Oil Prices: Dubai and Oman
+   주간 데이터 (매주 월요일 기준), 단위: USD/Barrel
+   API 키: https://fred.stlouisfed.org/docs/api/api_key.html
+──────────────────────────────────────────── */
+async function fetchDubaiFRED() {
+  if (!FRED_API_KEY || FRED_API_KEY === 'YOUR_FRED_API_KEY_HERE') {
+    console.warn('[OilWatch] FRED API 키가 설정되지 않았습니다. app.js의 FRED_API_KEY를 입력하세요.');
+    return false;
+  }
+
+  const url =
+    `https://api.stlouisfed.org/fred/series/observations` +
+    `?series_id=DCOILDUBBI` +
+    `&api_key=${FRED_API_KEY}` +
+    `&file_type=json` +
+    `&sort_order=desc` +
+    `&limit=10`;
+
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+
+    // '.' 은 해당 날짜 데이터 없음을 의미하므로 필터링
+    const obs = (data.observations || []).filter(o => o.value !== '.' && o.value != null);
+    if (obs.length < 1) throw new Error('유효한 관측값 없음');
+
+    const latest  = obs[0];
+    const prev    = obs.length > 1 ? obs[1] : null;
+    const val     = parseFloat(latest.value);
+    const prevVal = prev ? parseFloat(prev.value) : null;
+
+    if (isNaN(val)) throw new Error('가격 파싱 실패: ' + latest.value);
+
+    const chg  = (prevVal != null && !isNaN(prevVal)) ? round2(val - prevVal) : null;
+    const rate = (prevVal != null && !isNaN(prevVal) && prevVal !== 0)
+      ? (((val - prevVal) / prevVal) * 100).toFixed(2) + '%'
+      : null;
+    const date = latest.date.replace(/-/g, '.');
+
+    state.international.dubai = { val: round2(val), chg, rate, date };
+    renderInternational();
+    markLive(['international']);
+    console.log(`[OilWatch] Dubai FRED 갱신: $${val} (${date})`);
+    return true;
+  } catch (e) {
+    console.warn('[OilWatch] Dubai FRED 실패:', e.message);
+    return false;
+  }
+}
+
+/* ────────────────────────────────────────────
+   FETCH — 오피넷 API (한국석유공사)
+   엔드포인트: avgAllPrice.do — 전국 주유소 평균 판매가격
+   ─ 국내유가(station): 휘발유, 고급휘발유, 경유
+   ─ 주유소 평균판매가(product): 고급휘발유, 보통휘발유, 실내등유, 자동차경유
+   API 키: https://www.opinet.co.kr/user/custapi/custApiGruide.do
+──────────────────────────────────────────── */
+async function fetchOpinet() {
+  if (!OPINET_API_KEY || OPINET_API_KEY === 'YOUR_OPINET_API_KEY_HERE') {
+    console.warn('[OilWatch] Opinet API 키가 설정되지 않았습니다. app.js의 OPINET_API_KEY를 입력하세요.');
+    return false;
+  }
+
+  const apiUrl = `https://www.opinet.co.kr/api/avgAllPrice.do?code=${OPINET_API_KEY}&out=json`;
+
+  for (const makeProxy of FX_PROXIES) {
+    try {
+      const res = await fetch(makeProxy(apiUrl), { signal: AbortSignal.timeout(12000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+
+      const rawText = await proxyText(res);
+      let data;
+      try { data = JSON.parse(rawText); } catch { throw new Error('JSON parse failed'); }
+
+      const oils = data?.RESULT?.OIL;
+      if (!Array.isArray(oils) || oils.length === 0) throw new Error('OIL 배열 없음');
+
+      let stationCount = 0, productCount = 0;
+
+      // PRODCD 기반 매핑 (한글 인코딩 이슈 없음)
+      // B034: 고급휘발유 / B027: 보통휘발유(휘발유) / D047: 자동차경유 / C004: 실내등유
+      const PRODCD_MAP = {
+        'B034': { stationKey: 'premium',  productKey: 'premium'  },
+        'B027': { stationKey: 'gasoline', productKey: 'regular'  },
+        'D047': { stationKey: 'diesel',   productKey: 'diesel'   },
+        'C004': { stationKey: null,       productKey: 'kerosene' },
+      };
+
+      oils.forEach(oil => {
+        const map = PRODCD_MAP[oil.PRODCD];
+        if (!map) return;
+
+        const val = parseFloat((oil.PRICE || '').replace(/,/g, ''));
+        const chg = parseFloat((oil.DIFF  || '').replace(/,/g, ''));
+        if (isNaN(val)) return;
+
+        const safeChg   = isNaN(chg) ? null : round2(chg);
+        // 전일가 = 현재가 - 등락 → 변동률 계산
+        const prevPrice = (safeChg != null) ? val - safeChg : null;
+        const rate = (prevPrice != null && prevPrice > 0)
+          ? (Math.abs(safeChg / prevPrice) * 100).toFixed(2) + '%'
+          : null;
+        const tradeDate = (oil.TRADE_DT || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1.$2.$3');
+
+        if (map.stationKey) {
+          state.station[map.stationKey] = { val: round2(val), chg: safeChg, rate, date: tradeDate };
+          stationCount++;
+        }
+        if (map.productKey) {
+          state.product[map.productKey] = { val: round2(val), chg: safeChg };
+          productCount++;
+        }
+      });
+
+      if (stationCount > 0) {
+        renderStation();
+        markLive(['station']);
+        console.log('[OilWatch] Opinet 국내유가 갱신:', stationCount, '건');
+      }
+      if (productCount > 0) {
+        renderProduct();
+        markLive(['product']);
+        console.log('[OilWatch] Opinet 주유소 평균판매가 갱신:', productCount, '건');
+      }
+
+      if (stationCount > 0 || productCount > 0) return true;
+      throw new Error('매칭 품목 없음');
+
+    } catch (e) {
+      console.warn('[OilWatch] Opinet fetch 실패:', e.message);
+    }
+  }
+
+  console.warn('[OilWatch] Opinet 전체 실패');
+  return false;
 }
 
 async function fetchForex() {
@@ -461,8 +677,9 @@ async function fetchForex() {
       const found = parseNaverForex(html);
       if (found) {
         renderForex();
+        markLive(['forex']);
         console.log('[OilWatch] 네이버 환율 갱신 (' + proxyUrl.slice(0, 40) + '...)');
-        return;
+        return true;
       }
       console.warn('[OilWatch] 파싱 결과 없음 — 다음 proxy 시도');
     } catch (e) {
@@ -470,6 +687,7 @@ async function fetchForex() {
     }
   }
   console.warn('[OilWatch] 환율 전체 실패 — seed 값 유지');
+  return false;
 }
 
 function parseNaverForex(html) {
@@ -561,9 +779,16 @@ async function fetchSamhwa() {
       const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(12000) });
       if (!res.ok) throw new Error('proxy ' + res.status);
       const html = await proxyText(res);
-      parseAndApply(html);
-      console.log('[OilWatch] samhwa 갱신 (' + proxyUrl.slice(0, 40) + '...)');
-      return true;
+      const flags = parseAndApply(html);
+      if (flags.domestic) markLive(['domestic']);
+      if (flags.product)  markLive(['product']);
+      if (flags.factory)  markLive(['factory']);
+      // 하나라도 갱신되면 성공으로 간주
+      if (flags.domestic || flags.product || flags.factory) {
+        console.log('[OilWatch] samhwa 갱신 (' + proxyUrl.slice(0, 40) + '...)', flags);
+        return true;
+      }
+      console.warn('[OilWatch] samhwa 파싱 결과 없음 — 다음 proxy');
     } catch (e) {
       console.warn('[OilWatch] samhwa fetch 실패:', e.message);
     }
@@ -576,7 +801,8 @@ async function fetchSamhwa() {
    PARSE HTML response from samhwa.biz
 ──────────────────────────────────────────── */
 function parseAndApply(html) {
-  if (!html) return;
+  const flags = { domestic: false, product: false, factory: false };
+  if (!html) return flags;
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const tables = [...doc.querySelectorAll('table')];
 
@@ -592,35 +818,28 @@ function parseAndApply(html) {
     });
 
     // Domestic oil: table with 일자/당일/전일 columns
+    // 헤더 매칭을 느슨하게 — '일자' 와 '휘발유' 만 포함하면 매칭
     const headers = [...tbl.querySelectorAll('th')].map(h => h.textContent.trim());
-    if (headers.includes('일자') && headers.includes('휘발유 (92RON)')) {
+    const hasDate    = headers.some(h => h.includes('일자'));
+    const hasGasolineHdr = headers.some(h => h.includes('휘발유') && (h.includes('92') || h.includes('RON')));
+    if (hasDate && hasGasolineHdr) {
       rows.forEach(row => {
         const cells = [...row.querySelectorAll('td')].map(c => c.textContent.trim());
         if (cells[0] === '당일') {
           state.domestic.today = parseDomesticRow(cells);
           changed = true;
+          flags.domestic = true;
         }
         if (cells[0] === '전일') {
           state.domestic.prev = parseDomesticRow(cells);
           changed = true;
+          flags.domestic = true;
         }
       });
     }
 
-    // Product price: 고급휘발유 / 보통휘발유 / 실내등유 / 자동차용경유
-    if (headers.includes('고급휘발유') && headers.includes('보통휘발유')) {
-      const dataRow = rows.find(r => [...r.querySelectorAll('td')][0]?.textContent.trim() === '당일');
-      const diffRow = rows.find(r => [...r.querySelectorAll('td')][0]?.textContent.trim() === '전일대비');
-      if (dataRow && diffRow) {
-        const vals = [...dataRow.querySelectorAll('td')].map(c => parseFloat(c.textContent.replace(/,/g, '').trim()));
-        const diffs = [...diffRow.querySelectorAll('td')].map(c => parseFloat(c.textContent.replace(/,/g, '').trim()));
-        state.product.premium  = { val: vals[1], chg: diffs[1] };
-        state.product.regular  = { val: vals[2], chg: diffs[2] };
-        state.product.kerosene = { val: vals[3], chg: diffs[3] };
-        state.product.diesel   = { val: vals[4], chg: diffs[4] };
-        changed = true;
-      }
-    }
+    // Product price (고급휘발유/보통휘발유/실내등유/경유) → Opinet API 전담
+    // samhwa 파싱으로 product를 갱신하지 않음
 
     // Factory price — detect SK 공장도가 block
     if (headers.length === 3 && headers[0] === '휘발유' && headers[1] === '등유' && headers[2] === '경유') {
@@ -637,6 +856,7 @@ function parseAndApply(html) {
         if (!changed) {
           state.factory.sk = { gasoline: vals[0] || null, kerosene: vals[1] || null, diesel: vals[2] || null };
           changed = true;
+          flags.factory = true;
         }
       }
     }
@@ -648,6 +868,7 @@ function parseAndApply(html) {
     renderFactory(activeCompany);
     console.log('[OilWatch] Data refreshed from samhwa.biz');
   }
+  return flags;
 }
 
 function parseOilRow(cells) {
@@ -686,17 +907,109 @@ document.querySelectorAll('.ftab').forEach(btn => {
 });
 
 /* ────────────────────────────────────────────
+   FETCH ORCHESTRATOR
+   우선순위:
+   ① Opinet API → 국내유가(station) + 주유소 평균판매가(product)
+      실패 시 → Naver 스크래핑으로 station 폴백 / product는 STALE
+   ② samhwa.biz → 석유제품가(domestic) + 공장도가(factory)
+   ③ currency-api / Naver → 환율(forex)
+   ④ Stooq / Yahoo → 국제유가 WTI/Brent
+   ⑤ FRED → Dubai유 (주간)
+──────────────────────────────────────────── */
+async function fetchAll() {
+  const tasks = [
+    // ① Opinet: 국내유가 + 주유소 평균판매가 (1차)
+    fetchOpinet()
+      .then(ok => {
+        if (ok) return;
+        // Opinet 실패 시 Naver로 station 폴백
+        return fetchNaverStation()
+          .then(navOk => {
+            if (!navOk) markStale(['station']);
+          });
+        // product는 Opinet만 지원 — 실패 시 STALE
+      })
+      .then(() => {
+        if (fetchStatus.product === 'pending') markStale(['product']);
+      }),
+
+    // ② samhwa: 석유제품가(domestic) + 공장도가(factory)
+    fetchSamhwa()
+      .then(ok => { if (!ok) markStale(['domestic', 'factory']); }),
+
+    // ③ 환율
+    fetchForexAPI()
+      .then(ok => ok ? null : fetchForex())
+      .then(() => { if (fetchStatus.forex === 'pending') markStale(['forex']); }),
+
+    // ④ Stooq/Yahoo: WTI/Brent
+    fetchOilYahoo(),
+
+    // ⑤ FRED: Dubai유 (DCOILDUBBI 주간)
+    fetchDubaiFRED()
+      .then(ok => { if (!ok && fetchStatus.international === 'pending') markStale(['international']); }),
+  ];
+  await Promise.allSettled(tasks);
+
+  if (fetchStatus.international === 'pending') markStale(['international']);
+  if (fetchStatus.station       === 'pending') markStale(['station']);
+  if (fetchStatus.product       === 'pending') markStale(['product']);
+}
+
+function markLive(keys) {
+  keys.forEach(k => fetchStatus[k] = 'live');
+  renderStatusBadges();
+}
+function markStale(keys) {
+  keys.forEach(k => { if (fetchStatus[k] !== 'live') fetchStatus[k] = 'stale'; });
+  renderStatusBadges();
+}
+
+function renderStatusBadges() {
+  const map = {
+    'sec-international': fetchStatus.international,
+    'sec-station':       fetchStatus.station,
+    'sec-forex':         fetchStatus.forex,
+    'sec-domestic':      fetchStatus.domestic,
+    'sec-product':       fetchStatus.product,
+    'sec-factory':       fetchStatus.factory,
+  };
+  Object.entries(map).forEach(([id, status]) => {
+    const card = document.getElementById(id);
+    if (!card) return;
+    let badge = card.querySelector('.status-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'status-badge';
+      const header = card.querySelector('.card-header');
+      if (header) header.appendChild(badge);
+    }
+    badge.classList.remove('status-live','status-stale','status-pending');
+    if (status === 'live') {
+      badge.classList.add('status-live');
+      badge.textContent = '● LIVE';
+    } else if (status === 'stale') {
+      badge.classList.add('status-stale');
+      badge.textContent = '● STALE';
+      badge.title = '실시간 데이터 가져오기 실패 - 표시값은 최근 캐시값입니다';
+    } else {
+      badge.classList.add('status-pending');
+      badge.textContent = '● 로딩…';
+    }
+  });
+}
+
+/* ────────────────────────────────────────────
    REFRESH BUTTON
 ──────────────────────────────────────────── */
 const refreshBtn = $('refreshBtn');
 refreshBtn.addEventListener('click', async () => {
   refreshBtn.classList.add('spinning');
   refreshBtn.disabled = true;
-  await Promise.all([
-    fetchSamhwa(),
-    fetchForexAPI().then(ok => ok ? null : fetchForex()),
-    fetchOilYahoo().then(n => n < 2 ? fetchNaverStation() : null),
-  ]);
+  // 상태 초기화
+  Object.keys(fetchStatus).forEach(k => fetchStatus[k] = 'pending');
+  renderStatusBadges();
+  await fetchAll();
   renderAll();
   setTimeout(() => {
     refreshBtn.classList.remove('spinning');
@@ -708,13 +1021,9 @@ refreshBtn.addEventListener('click', async () => {
    AUTO REFRESH (every 5 minutes)
 ──────────────────────────────────────────── */
 async function autoRefresh() {
-  await Promise.all([
-    fetchSamhwa(),
-    // 환율: CDN API 우선, 실패 시 네이버 스크래핑 폴백
-    fetchForexAPI().then(ok => ok ? null : fetchForex()),
-    // 국제유가: Yahoo Finance JSON 우선, 실패 시 네이버 스크래핑 폴백
-    fetchOilYahoo().then(n => n < 2 ? fetchNaverStation() : null),
-  ]);
+  Object.keys(fetchStatus).forEach(k => fetchStatus[k] = 'pending');
+  renderStatusBadges();
+  await fetchAll();
   renderAll();
 }
 
@@ -724,14 +1033,11 @@ async function autoRefresh() {
 (async () => {
   // 1. Render seed data immediately (no flicker)
   renderAll();
+  renderStatusBadges();
 
-  // 2. Live fetch: 공개 API 우선, 실패 시 CORS 프록시 스크래핑 폴백
+  // 2. Live fetch: 모든 소스 병렬 실행
   fetchAttempted = true;
-  await Promise.all([
-    fetchSamhwa(),
-    fetchForexAPI().then(ok => ok ? null : fetchForex()),
-    fetchOilYahoo().then(n => n < 2 ? fetchNaverStation() : null),
-  ]);
+  await fetchAll();
   renderAll();
 
   // 3. Auto refresh every 5 min
