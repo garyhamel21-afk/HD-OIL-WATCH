@@ -364,56 +364,31 @@ async function proxyText(res) {
 }
 
 /* ────────────────────────────────────────────
-   FETCH — 환율 (jsDelivr CDN currency-api, CORS 허용, API키 불필요)
-   오늘/전일 두 번 호출 → 전일 대비 등락 계산
+   FETCH — 환율 (한국은행 ECOS API)
+   /api/forex 서버리스 함수 경유 (API 키는 Vercel 환경변수에만 보관)
+   통계표: 731Y001 (주요국 통화의 대원화환율, 일별)
 ──────────────────────────────────────────── */
 async function fetchForexAPI() {
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  try {
+    const res = await fetch('/api/forex', { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
 
-  // CDN 미러 2개 순차 시도 (jsDelivr → Cloudflare Pages)
-  const CDN_MIRRORS = [
-    (tag) => `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${tag}/v1/currencies/usd.min.json`,
-    (tag) => `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${tag}/v1/currencies/usd.json`,
-    (tag) => `https://latest.currency-api.pages.dev/v1/currencies/usd.min.json`.replace('latest', tag === 'latest' ? 'latest' : tag),
-  ];
+    // data: { usd:{val,chg}, eur:{val,chg}, jpy:{val,chg}, cny:{val,chg}, date:"2026.05.05" }
+    const ids = ['usd', 'eur', 'jpy', 'cny'];
+    if (!ids.every(id => data[id]?.val != null)) throw new Error('필수 통화 데이터 누락');
 
-  for (const makeCdnUrl of CDN_MIRRORS) {
-    try {
-      const [todayRes, yestRes] = await Promise.all([
-        fetch(makeCdnUrl('latest'),    { signal: AbortSignal.timeout(10000) }),
-        fetch(makeCdnUrl(yesterday),   { signal: AbortSignal.timeout(10000) }),
-      ]);
-      if (!todayRes.ok) throw new Error('today HTTP ' + todayRes.status);
-
-      const todayData = await todayRes.json();
-      const yestData  = yestRes.ok ? await yestRes.json() : null;
-
-      const t = todayData.usd;
-      if (!t?.krw) throw new Error('no KRW data in response');
-      const y = yestData?.usd;
-
-      const calc = (todayVal, yestVal) => ({
-        val: round2(todayVal),
-        chg: (y && yestVal) ? round2(todayVal - yestVal) : null,
-      });
-
-      state.forex = {
-        usd: calc(t.krw,                   y?.krw),
-        eur: calc(t.krw / t.eur,           y ? y.krw / y.eur  : null),
-        jpy: calc((t.krw / t.jpy) * 100,  y ? (y.krw / y.jpy) * 100 : null),
-        cny: calc(t.krw / t.cny,          y ? y.krw / y.cny  : null),
-      };
-
-      forexDate = (todayData.date || '').replace(/-/g, '.') + ' currency-api 기준';
-      renderForex();
-      markLive(['forex']);
-      console.log('[OilWatch] 환율 API 갱신 (currency-api)');
-      return true;
-    } catch (e) {
-      console.warn('[OilWatch] 환율 API 실패:', e.message);
-    }
+    ids.forEach(id => { state.forex[id] = { val: data[id].val, chg: data[id].chg }; });
+    forexDate = (data.date || '') + ' 한국은행 기준';
+    renderForex();
+    markLive(['forex']);
+    console.log('[OilWatch] 환율 갱신 (한국은행 ECOS)', data.date);
+    return true;
+  } catch (e) {
+    console.warn('[OilWatch] 환율 /api/forex 실패:', e.message);
+    return false;
   }
-  return false;
 }
 
 /* ────────────────────────────────────────────
