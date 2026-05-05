@@ -339,9 +339,8 @@ function parseNaverOilPrices(html) {
 // Dubai유 (DCOILDUBBI) 시리즈 조회에 사용됩니다.
 const FRED_API_KEY = 'f82e656deed89f39fac46114b4d6a2a9';
 
-// Opinet API Key — https://www.opinet.co.kr/user/custapi/custApiGruide.do 에서 무료 발급
-// 국내유가(station) + 주유소 평균판매가(product) 조회에 사용됩니다.
-const OPINET_API_KEY = 'F251010901';
+// Opinet API 키는 클라이언트에 노출되지 않습니다.
+// Vercel 환경변수(OPINET_API_KEY)를 읽는 /api/opinet 서버리스 함수를 경유합니다.
 
 // 프록시 우선순위:
 // 1. /api/proxy  — 자체 Vercel 서버리스 (raw 응답, 가장 안정적)
@@ -579,86 +578,82 @@ async function fetchDubaiFRED() {
 
 /* ────────────────────────────────────────────
    FETCH — 오피넷 API (한국석유공사)
-   엔드포인트: avgAllPrice.do — 전국 주유소 평균 판매가격
+   /api/opinet 서버리스 함수 경유 (API 키는 Vercel 환경변수에만 보관)
    ─ 국내유가(station): 휘발유, 고급휘발유, 경유
    ─ 주유소 평균판매가(product): 고급휘발유, 보통휘발유, 실내등유, 자동차경유
-   API 키: https://www.opinet.co.kr/user/custapi/custApiGruide.do
 ──────────────────────────────────────────── */
 async function fetchOpinet() {
-  if (!OPINET_API_KEY || OPINET_API_KEY === 'YOUR_OPINET_API_KEY_HERE') {
-    console.warn('[OilWatch] Opinet API 키가 설정되지 않았습니다. app.js의 OPINET_API_KEY를 입력하세요.');
+  // /api/opinet → Vercel 서버리스 (키 노출 없음)
+  // 로컬 개발 시 vercel dev 또는 CORS 프록시 직접 호출 불가 → false 반환
+  let data = null;
+
+  try {
+    const res = await fetch('/api/opinet', { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+  } catch (e) {
+    console.warn('[OilWatch] Opinet /api/opinet 실패:', e.message);
     return false;
   }
 
-  const apiUrl = `https://www.opinet.co.kr/api/avgAllPrice.do?code=${OPINET_API_KEY}&out=json`;
-
-  for (const makeProxy of FX_PROXIES) {
-    try {
-      const res = await fetch(makeProxy(apiUrl), { signal: AbortSignal.timeout(12000) });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-
-      const rawText = await proxyText(res);
-      let data;
-      try { data = JSON.parse(rawText); } catch { throw new Error('JSON parse failed'); }
-
-      const oils = data?.RESULT?.OIL;
-      if (!Array.isArray(oils) || oils.length === 0) throw new Error('OIL 배열 없음');
-
-      let stationCount = 0, productCount = 0;
-
-      // PRODCD 기반 매핑 (한글 인코딩 이슈 없음)
-      // B034: 고급휘발유 / B027: 보통휘발유(휘발유) / D047: 자동차경유 / C004: 실내등유
-      const PRODCD_MAP = {
-        'B034': { stationKey: 'premium',  productKey: 'premium'  },
-        'B027': { stationKey: 'gasoline', productKey: 'regular'  },
-        'D047': { stationKey: 'diesel',   productKey: 'diesel'   },
-        'C004': { stationKey: null,       productKey: 'kerosene' },
-      };
-
-      oils.forEach(oil => {
-        const map = PRODCD_MAP[oil.PRODCD];
-        if (!map) return;
-
-        const val = parseFloat((oil.PRICE || '').replace(/,/g, ''));
-        const chg = parseFloat((oil.DIFF  || '').replace(/,/g, ''));
-        if (isNaN(val)) return;
-
-        const safeChg   = isNaN(chg) ? null : round2(chg);
-        // 전일가 = 현재가 - 등락 → 변동률 계산
-        const prevPrice = (safeChg != null) ? val - safeChg : null;
-        const rate = (prevPrice != null && prevPrice > 0)
-          ? (Math.abs(safeChg / prevPrice) * 100).toFixed(2) + '%'
-          : null;
-        const tradeDate = (oil.TRADE_DT || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1.$2.$3');
-
-        if (map.stationKey) {
-          state.station[map.stationKey] = { val: round2(val), chg: safeChg, rate, date: tradeDate };
-          stationCount++;
-        }
-        if (map.productKey) {
-          state.product[map.productKey] = { val: round2(val), chg: safeChg };
-          productCount++;
-        }
-      });
-
-      if (stationCount > 0) {
-        renderStation();
-        markLive(['station']);
-        console.log('[OilWatch] Opinet 국내유가 갱신:', stationCount, '건');
-      }
-      if (productCount > 0) {
-        renderProduct();
-        markLive(['product']);
-        console.log('[OilWatch] Opinet 주유소 평균판매가 갱신:', productCount, '건');
-      }
-
-      if (stationCount > 0 || productCount > 0) return true;
-      throw new Error('매칭 품목 없음');
-
-    } catch (e) {
-      console.warn('[OilWatch] Opinet fetch 실패:', e.message);
-    }
+  const oils = data?.RESULT?.OIL;
+  if (!Array.isArray(oils) || oils.length === 0) {
+    console.warn('[OilWatch] Opinet 응답에 OIL 배열 없음');
+    return false;
   }
+
+  // PRODCD 기반 매핑 (한글 인코딩 이슈 없음)
+  // B034: 고급휘발유 / B027: 보통휘발유(휘발유) / D047: 자동차경유 / C004: 실내등유
+  const PRODCD_MAP = {
+    'B034': { stationKey: 'premium',  productKey: 'premium'  },
+    'B027': { stationKey: 'gasoline', productKey: 'regular'  },
+    'D047': { stationKey: 'diesel',   productKey: 'diesel'   },
+    'C004': { stationKey: null,       productKey: 'kerosene' },
+  };
+
+  let stationCount = 0, productCount = 0;
+
+  oils.forEach(oil => {
+    const map = PRODCD_MAP[oil.PRODCD];
+    if (!map) return;
+
+    const val = parseFloat((oil.PRICE || '').replace(/,/g, ''));
+    const chg = parseFloat((oil.DIFF  || '').replace(/,/g, ''));
+    if (isNaN(val)) return;
+
+    const safeChg   = isNaN(chg) ? null : round2(chg);
+    const prevPrice = (safeChg != null) ? val - safeChg : null;
+    const rate = (prevPrice != null && prevPrice > 0)
+      ? (Math.abs(safeChg / prevPrice) * 100).toFixed(2) + '%'
+      : null;
+    const tradeDate = (oil.TRADE_DT || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1.$2.$3');
+
+    if (map.stationKey) {
+      state.station[map.stationKey] = { val: round2(val), chg: safeChg, rate, date: tradeDate };
+      stationCount++;
+    }
+    if (map.productKey) {
+      state.product[map.productKey] = { val: round2(val), chg: safeChg };
+      productCount++;
+    }
+  });
+
+  if (stationCount > 0) {
+    renderStation();
+    markLive(['station']);
+    console.log('[OilWatch] Opinet 국내유가 갱신:', stationCount, '건');
+  }
+  if (productCount > 0) {
+    renderProduct();
+    markLive(['product']);
+    console.log('[OilWatch] Opinet 주유소 평균판매가 갱신:', productCount, '건');
+  }
+
+  if (stationCount === 0 && productCount === 0) {
+    console.warn('[OilWatch] Opinet 매칭 품목 없음');
+  }
+  return stationCount > 0 || productCount > 0;
+}
 
   console.warn('[OilWatch] Opinet 전체 실패');
   return false;
