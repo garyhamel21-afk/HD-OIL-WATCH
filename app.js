@@ -650,10 +650,6 @@ async function fetchOpinet() {
   return stationCount > 0 || productCount > 0;
 }
 
-  console.warn('[OilWatch] Opinet 전체 실패');
-  return false;
-}
-
 async function fetchForex() {
   // finance.naver.com/ 메인 페이지는 환율 테이블이 SSR로 포함됨
   const naverUrl = 'https://finance.naver.com/';
