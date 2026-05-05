@@ -335,9 +335,8 @@ function parseNaverOilPrices(html) {
    메인 페이지는 서버사이드 렌더링으로 환율 포함
    proxy 2개 순차 시도
 ──────────────────────────────────────────── */
-// FRED API Key — https://fred.stlouisfed.org/docs/api/api_key.html 에서 무료 발급
-// Dubai유 (DCOILDUBBI) 시리즈 조회에 사용됩니다.
-const FRED_API_KEY = 'f82e656deed89f39fac46114b4d6a2a9';
+// FRED API 키는 클라이언트에 노출되지 않습니다.
+// Vercel 환경변수(FRED_API_KEY)를 읽는 /api/fred 서버리스 함수를 경유합니다.
 
 // Opinet API 키는 클라이언트에 노출되지 않습니다.
 // Vercel 환경변수(OPINET_API_KEY)를 읽는 /api/opinet 서버리스 함수를 경유합니다.
@@ -530,23 +529,19 @@ async function fetchOilYahoo() {
    API 키: https://fred.stlouisfed.org/docs/api/api_key.html
 ──────────────────────────────────────────── */
 async function fetchDubaiFRED() {
-  if (!FRED_API_KEY || FRED_API_KEY === 'YOUR_FRED_API_KEY_HERE') {
-    console.warn('[OilWatch] FRED API 키가 설정되지 않았습니다. app.js의 FRED_API_KEY를 입력하세요.');
+  // /api/fred → Vercel 서버리스 (키 노출 없음)
+  let data;
+  try {
+    const res = await fetch('/api/fred', { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+    if (data.error) throw new Error(data.error);
+  } catch (e) {
+    console.warn('[OilWatch] Dubai FRED /api/fred 실패:', e.message);
     return false;
   }
 
-  const url =
-    `https://api.stlouisfed.org/fred/series/observations` +
-    `?series_id=DCOILDUBBI` +
-    `&api_key=${FRED_API_KEY}` +
-    `&file_type=json` +
-    `&sort_order=desc` +
-    `&limit=10`;
-
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
 
     // '.' 은 해당 날짜 데이터 없음을 의미하므로 필터링
     const obs = (data.observations || []).filter(o => o.value !== '.' && o.value != null);
