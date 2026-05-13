@@ -37,7 +37,7 @@ export default async function handler(req, res) {
       `&api_key=${apiKey}` +
       `&file_type=json` +
       `&sort_order=desc` +
-      `&limit=5`;
+      `&limit=20`;
 
     const response = await fetch(url, {
       headers: { Accept: 'application/json' },
