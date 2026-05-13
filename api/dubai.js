@@ -76,9 +76,10 @@ export default async function handler(req, res) {
     const latest = rows[rows.length - 1];
     const prev   = rows.length > 1 ? rows[rows.length - 2] : null;
 
-    // 날짜 변환: "26년05월12일" → "2026.05.12"
+    // 날짜 변환: "26년05월12일" (EUC-KR 깨짐 가능) → "2026.05.12"
+    // 한글 자리가 깨져도 숫자는 ASCII이므로 숫자만 추출
     const parseDate = (s) => {
-      const m = s.match(/(\d{2})년(\d{2})월(\d{2})일/);
+      const m = s.match(/(\d{2})\D+(\d{2})\D+(\d{2})/);
       return m ? `20${m[1]}.${m[2]}.${m[3]}` : s;
     };
 
