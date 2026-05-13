@@ -498,50 +498,28 @@ async function fetchOilYahoo() {
 }
 
 /* ────────────────────────────────────────────
-   FETCH — 두바이유 (FRED St. Louis Fed API)
-   Series: DCOILDUBBI — Crude Oil Prices: Dubai and Oman
-   주간 데이터 (매주 월요일 기준), 단위: USD/Barrel
-   API 키: https://fred.stlouisfed.org/docs/api/api_key.html
+   FETCH — 두바이유 (오피넷 gloptotSelect.do 스크래핑)
+   /api/dubai 서버리스 함수 경유
+   소스: https://www.opinet.co.kr/gloptotSelect.do
+   조사주기: 화~토(T+1일 조사), 단위: USD/Barrel
 ──────────────────────────────────────────── */
 async function fetchDubaiFRED() {
-  // /api/fred → Vercel 서버리스 (키 노출 없음)
-  let data;
   try {
-    const res = await fetch('/api/fred', { signal: AbortSignal.timeout(12000) });
+    const res = await fetch('/api/dubai', { signal: AbortSignal.timeout(12000) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    data = await res.json();
+    const data = await res.json();
     if (data.error) throw new Error(data.error);
-  } catch (e) {
-    console.warn('[OilWatch] Dubai FRED /api/fred 실패:', e.message);
-    return false;
-  }
 
-  try {
-
-    // '.' 은 해당 날짜 데이터 없음을 의미하므로 필터링
-    const obs = (data.observations || []).filter(o => o.value !== '.' && o.value != null);
-    if (obs.length < 1) throw new Error('유효한 관측값 없음');
-
-    const latest  = obs[0];
-    const prev    = obs.length > 1 ? obs[1] : null;
-    const val     = parseFloat(latest.value);
-    const prevVal = prev ? parseFloat(prev.value) : null;
-
-    if (isNaN(val)) throw new Error('가격 파싱 실패: ' + latest.value);
-
-    const chg  = (prevVal != null && !isNaN(prevVal)) ? round2(val - prevVal) : null;
-    const rate = (prevVal != null && !isNaN(prevVal) && prevVal !== 0)
-      ? (((val - prevVal) / prevVal) * 100).toFixed(2) + '%'
-      : null;
-    const date = latest.date.replace(/-/g, '.');
+    const { val, chg, rate, date } = data;
+    if (!val || isNaN(val)) throw new Error('가격 파싱 실패');
 
     state.international.dubai = { val: round2(val), chg, rate, date };
     renderInternational();
     markLive(['international']);
-    console.log(`[OilWatch] Dubai FRED 갱신: $${val} (${date})`);
+    console.log(`[OilWatch] Dubai 오피넷 갱신: $${val} (${date})`);
     return true;
   } catch (e) {
-    console.warn('[OilWatch] Dubai FRED 실패:', e.message);
+    console.warn('[OilWatch] Dubai 오피넷 /api/dubai 실패:', e.message);
     return false;
   }
 }
