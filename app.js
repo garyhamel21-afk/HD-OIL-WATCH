@@ -335,6 +335,9 @@ function parseNaverOilPrices(html) {
    메인 페이지는 서버사이드 렌더링으로 환율 포함
    proxy 2개 순차 시도
 ──────────────────────────────────────────── */
+// FRED API 키는 클라이언트에 노출되지 않습니다.
+// Vercel 환경변수(FRED_API_KEY)를 읽는 /api/fred 서버리스 함수를 경유합니다.
+
 // Opinet API 키는 클라이언트에 노출되지 않습니다.
 // Vercel 환경변수(OPINET_API_KEY)를 읽는 /api/opinet 서버리스 함수를 경유합니다.
 
@@ -389,68 +392,17 @@ async function fetchForexAPI() {
 }
 
 /* ────────────────────────────────────────────
-   FETCH — WTI/Brent (FRED St. Louis Fed API)
-   /api/fred?series_id=... 서버리스 경유 (키 노출 없음)
-   DCOILWTICO   = WTI 일별 (USD/Barrel)
-   DCOILBRENTEU = Brent 일별 (USD/Barrel)
-   변화량: 최신 관측값 − 전일 관측값 (일간 변동)
+   FETCH — 국제유가 (Stooq CSV 1차, Yahoo JSON 폴백)
+   ─ stooq.com 은 CORS 허용 + CSV 형식 → 가장 안정적
+   ─ Yahoo 는 종종 401/Crumb 요구하므로 프록시 경유
 ──────────────────────────────────────────── */
-async function fetchWtiBrentFRED() {
-  const SERIES = [
-    { series_id: 'DCOILWTICO',   key: 'wti',   label: 'WTI'   },
-    { series_id: 'DCOILBRENTEU', key: 'brent',  label: 'Brent' },
-  ];
-  let updated = 0;
-  for (const { series_id, key, label } of SERIES) {
-    try {
-      const res = await fetch(`/api/fred?series_id=${series_id}`, {
-        signal: AbortSignal.timeout(12000),
-      });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-
-      // '.' 은 결측값 — 필터링 후 최신 2개 사용
-      const obs = (data.observations || []).filter(o => o.value !== '.' && o.value != null);
-      if (obs.length < 1) throw new Error('유효한 관측값 없음');
-
-      const latest  = obs[0];
-      const prev    = obs.length > 1 ? obs[1] : null;
-      const val     = parseFloat(latest.value);
-      const prevVal = prev ? parseFloat(prev.value) : null;
-      if (isNaN(val)) throw new Error('가격 파싱 실패');
-
-      const chg  = (prevVal != null && !isNaN(prevVal)) ? round2(val - prevVal) : null;
-      const rate = (prevVal != null && !isNaN(prevVal) && prevVal !== 0)
-        ? (((val - prevVal) / prevVal) * 100).toFixed(2) + '%'
-        : null;
-      const date = latest.date.replace(/-/g, '.');
-
-      state.international[key] = { val: round2(val), chg, rate, date };
-      updated++;
-      console.log(`[OilWatch] ${label} FRED 갱신: $${val} (${date})`);
-    } catch (e) {
-      console.warn(`[OilWatch] ${label} FRED 실패:`, e.message);
-    }
-  }
-  if (updated > 0) {
-    renderInternational();
-    if (updated >= 2) markLive(['international']);
-  }
-  return updated;
-}
-
-/* ────────────────────────────────────────────
-   FETCH — WTI/Brent 폴백 (Stooq → Yahoo)
-   FRED 실패 시에만 호출
-──────────────────────────────────────────── */
-async function fetchWtiBrentFallback() {
-  // 1차 폴백: Stooq q/l/
+async function fetchOilStooq() {
+  // Stooq 심볼: CL.F = WTI, BZ.F = Brent (모두 CORS 허용)
   const TICKERS = [
-    { symbol: 'cl.f', key: 'wti',   label: 'WTI'  },
+    { symbol: 'cl.f', key: 'wti',   label: 'WTI' },
     { symbol: 'bz.f', key: 'brent', label: 'Brent' },
   ];
-  let stooqUpdated = 0;
+  let updated = 0;
   for (const { symbol, key, label } of TICKERS) {
     try {
       const url = `https://stooq.com/q/l/?s=${symbol}&f=sd2t2ohlcv&h&e=csv`;
@@ -460,107 +412,136 @@ async function fetchWtiBrentFallback() {
       const lines = csv.trim().split('\n');
       if (lines.length < 2) throw new Error('empty CSV');
       const cols = lines[1].split(',');
+      // Symbol,Date,Time,Open,High,Low,Close,Volume
       const date  = cols[1];
       const open  = parseFloat(cols[3]);
       const close = parseFloat(cols[6]);
       if (isNaN(close)) throw new Error('parse failed');
       const chg  = !isNaN(open) ? round2(close - open) : null;
       const rate = !isNaN(open) && open ? (((close - open) / open) * 100).toFixed(2) + '%' : null;
-      state.international[key] = { val: round2(close), chg, rate, date: date?.replace(/-/g, '.') ?? null };
-      stooqUpdated++;
-      console.log(`[OilWatch] ${label} Stooq 폴백: $${close}`);
+      state.international[key] = {
+        val: round2(close), chg, rate,
+        date: date ? date.replace(/-/g, '.') : null,
+      };
+      updated++;
+      console.log(`[OilWatch] ${label} Stooq 갱신: $${close}`);
     } catch (e) {
-      console.warn(`[OilWatch] ${label} Stooq 폴백 실패:`, e.message);
+      console.warn(`[OilWatch] ${label} Stooq 실패:`, e.message);
     }
   }
-  if (stooqUpdated >= 2) {
+  if (updated > 0) {
     renderInternational();
-    markLive(['international']);
-    return stooqUpdated;
+    if (updated >= 2) markLive(['international']);
   }
+  return updated;
+}
 
-  // 2차 폴백: Yahoo Finance
-  let yahooUpdated = 0;
-  for (const { symbol, key, label } of [
+async function fetchOilYahoo() {
+  // 1차 Stooq 시도
+  const stooqCount = await fetchOilStooq();
+  if (stooqCount >= 2) return stooqCount;
+
+  // 2차 Yahoo 폴백
+  const TICKERS = [
     { symbol: 'CL=F', key: 'wti',   label: 'WTI'   },
     { symbol: 'BZ=F', key: 'brent', label: 'Brent' },
-  ]) {
-    if (state.international[key]?.val != null) continue; // Stooq에서 이미 가져옴
+  ];
+
+  let updated = 0;
+
+  for (const { symbol, key, label } of TICKERS) {
     const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d`;
+
     for (const makeProxy of FX_PROXIES) {
       try {
         const res = await fetch(makeProxy(yahooUrl), { signal: AbortSignal.timeout(12000) });
         if (!res.ok) throw new Error('HTTP ' + res.status);
+
+        // proxyText로 문자열을 받은 뒤 JSON 파싱
+        // allorigins 래퍼({contents:"..."}) 처리는 proxyText 내부에서 완료
         const rawText = await proxyText(res);
         let chartData;
-        try { chartData = JSON.parse(rawText); } catch { throw new Error('JSON parse failed'); }
+        try { chartData = JSON.parse(rawText); }
+        catch { throw new Error('JSON parse failed'); }
+
         const result = chartData?.chart?.result?.[0];
         if (!result?.meta) throw new Error('no chart result');
-        const price     = result.meta.regularMarketPrice;
+
+        const price    = result.meta.regularMarketPrice;
         const prevClose = result.meta.previousClose ?? result.meta.chartPreviousClose;
         if (!price) throw new Error('no price');
+
         const chg  = prevClose ? round2(price - prevClose) : null;
         const rate = prevClose ? (((price - prevClose) / prevClose) * 100).toFixed(2) + '%' : null;
         const ts   = result.meta.regularMarketTime;
-        const date = ts ? new Date(ts * 1000).toLocaleDateString('ko-KR', {
-          year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Seoul',
-        }).replace(/\.\s*/g, '.').replace(/\.$/, '') : null;
+        const date = ts
+          ? new Date(ts * 1000).toLocaleDateString('ko-KR', {
+              year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Seoul',
+            }).replace(/\.\s*/g, '.').replace(/\.$/, '')
+          : null;
+
         state.international[key] = { val: round2(price), chg, rate, date };
-        yahooUpdated++;
-        console.log(`[OilWatch] ${label} Yahoo 폴백: $${price}`);
+        updated++;
+        console.log(`[OilWatch] ${label} Yahoo 갱신: $${price}`);
         break;
       } catch (e) {
-        console.warn(`[OilWatch] ${label} Yahoo 폴백 실패:`, e.message);
+        console.warn(`[OilWatch] ${label} Yahoo 실패:`, e.message);
       }
     }
   }
-  if (stooqUpdated + yahooUpdated > 0) {
+
+  if (updated > 0) {
     renderInternational();
     markLive(['international']);
   }
-  return stooqUpdated + yahooUpdated;
+  return updated;
 }
 
 /* ────────────────────────────────────────────
-   FETCH — Dubai유 (Stooq 일별 히스토리 CSV)
-   엔드포인트: stooq.com/q/d/l/?s=ds.f&i=d
-   포맷: Date,Open,High,Low,Close,Volume (오름차순)
-   변화량: 오늘 종가 − 전일 종가 (일간 변동)
+   FETCH — 두바이유 (FRED St. Louis Fed API)
+   Series: DCOILDUBBI — Crude Oil Prices: Dubai and Oman
+   주간 데이터 (매주 월요일 기준), 단위: USD/Barrel
+   API 키: https://fred.stlouisfed.org/docs/api/api_key.html
 ──────────────────────────────────────────── */
-async function fetchDubaiStooq() {
+async function fetchDubaiFRED() {
+  // /api/fred → Vercel 서버리스 (키 노출 없음)
+  let data;
   try {
-    const url = `https://stooq.com/q/d/l/?s=ds.f&i=d`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const res = await fetch('/api/fred', { signal: AbortSignal.timeout(12000) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    const csv = await res.text();
+    data = await res.json();
+    if (data.error) throw new Error(data.error);
+  } catch (e) {
+    console.warn('[OilWatch] Dubai FRED /api/fred 실패:', e.message);
+    return false;
+  }
 
-    const lines = csv.trim().split('\n').filter(l => l.trim());
-    if (lines.length < 2) throw new Error('empty CSV');
+  try {
 
-    const parseRow = (line) => line.split(',');
-    const latest = parseRow(lines[lines.length - 1]);
-    const prev   = lines.length >= 3 ? parseRow(lines[lines.length - 2]) : null;
+    // '.' 은 해당 날짜 데이터 없음을 의미하므로 필터링
+    const obs = (data.observations || []).filter(o => o.value !== '.' && o.value != null);
+    if (obs.length < 1) throw new Error('유효한 관측값 없음');
 
-    // Date,Open,High,Low,Close,Volume
-    const date      = latest[0];
-    const close     = parseFloat(latest[4]);
-    const prevClose = prev ? parseFloat(prev[4]) : null;
-    if (isNaN(close)) throw new Error('parse failed');
+    const latest  = obs[0];
+    const prev    = obs.length > 1 ? obs[1] : null;
+    const val     = parseFloat(latest.value);
+    const prevVal = prev ? parseFloat(prev.value) : null;
 
-    const chg  = (prevClose != null && !isNaN(prevClose)) ? round2(close - prevClose) : null;
-    const rate = (prevClose != null && !isNaN(prevClose) && prevClose !== 0)
-      ? (((close - prevClose) / prevClose) * 100).toFixed(2) + '%'
+    if (isNaN(val)) throw new Error('가격 파싱 실패: ' + latest.value);
+
+    const chg  = (prevVal != null && !isNaN(prevVal)) ? round2(val - prevVal) : null;
+    const rate = (prevVal != null && !isNaN(prevVal) && prevVal !== 0)
+      ? (((val - prevVal) / prevVal) * 100).toFixed(2) + '%'
       : null;
+    const date = latest.date.replace(/-/g, '.');
 
-    state.international.dubai = {
-      val: round2(close), chg, rate,
-      date: date ? date.replace(/-/g, '.') : null,
-    };
+    state.international.dubai = { val: round2(val), chg, rate, date };
     renderInternational();
-    console.log(`[OilWatch] Dubai Stooq 갱신: $${close} (전일대비 ${chg >= 0 ? '+' : ''}${chg})`);
+    markLive(['international']);
+    console.log(`[OilWatch] Dubai FRED 갱신: $${val} (${date})`);
     return true;
   } catch (e) {
-    console.warn('[OilWatch] Dubai Stooq 실패:', e.message);
+    console.warn('[OilWatch] Dubai FRED 실패:', e.message);
     return false;
   }
 }
@@ -893,9 +874,8 @@ document.querySelectorAll('.ftab').forEach(btn => {
       실패 시 → Naver 스크래핑으로 station 폴백 / product는 STALE
    ② samhwa.biz → 석유제품가(domestic) + 공장도가(factory)
    ③ currency-api / Naver → 환율(forex)
-   ④ FRED API → WTI/Brent (일별, /api/fred)
-      실패 시 → Stooq q/l/ → Yahoo JSON 폴백
-   ⑤ Stooq q/d/l/ → Dubai (일별 히스토리, 전일 대비)
+   ④ Stooq / Yahoo → 국제유가 WTI/Brent
+   ⑤ FRED → Dubai유 (주간)
 ──────────────────────────────────────────── */
 async function fetchAll() {
   const tasks = [
@@ -923,13 +903,12 @@ async function fetchAll() {
       .then(ok => ok ? null : fetchForex())
       .then(() => { if (fetchStatus.forex === 'pending') markStale(['forex']); }),
 
-    // ④ FRED: WTI/Brent → 실패 시 Stooq/Yahoo 폴백
-    fetchWtiBrentFRED()
-      .then(cnt => { if (cnt < 2) return fetchWtiBrentFallback(); })
-      .then(() => { if (fetchStatus.international === 'pending') markStale(['international']); }),
+    // ④ Stooq/Yahoo: WTI/Brent
+    fetchOilYahoo(),
 
-    // ⑤ Stooq q/d/l/: Dubai 일별 (전일 종가 대비)
-    fetchDubaiStooq(),
+    // ⑤ FRED: Dubai유 (DCOILDUBBI 주간)
+    fetchDubaiFRED()
+      .then(ok => { if (!ok && fetchStatus.international === 'pending') markStale(['international']); }),
   ];
   await Promise.allSettled(tasks);
 
@@ -1007,152 +986,6 @@ async function autoRefresh() {
   renderStatusBadges();
   await fetchAll();
   renderAll();
-}
-
-/* ────────────────────────────────────────────
-   STATION LOOKUP — 주유소 가격 이력 (최근 7일)
-   Opinet API: getLastDatePriceInfo.do
-──────────────────────────────────────────── */
-
-const LOOKUP_PRODCD = {
-  B027: '휘발유',
-  B034: '고급휘발유',
-  D047: '경유',
-  C004: '등유',
-};
-
-// 날짜 문자열 포맷 (YYYYMMDD → MM/DD)
-function fmtLookupDate(dt) {
-  if (!dt || dt.length < 8) return dt || '—';
-  return `${dt.slice(4, 6)}/${dt.slice(6, 8)}`;
-}
-
-async function fetchStationHistory(ucd) {
-  const resultEl = $('lookupResult');
-  resultEl.innerHTML = '<p class="lookup-loading">조회 중…</p>';
-
-  try {
-    const res = await fetch(`/api/opinet-station?ucd=${encodeURIComponent(ucd)}`, {
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-
-    let data;
-    try {
-      // EUC-KR 인코딩 대응: ArrayBuffer로 받아 TextDecoder 사용
-      const buf = await res.arrayBuffer();
-      const decoded = new TextDecoder('utf-8').decode(buf);
-      data = JSON.parse(decoded);
-    } catch {
-      throw new Error('응답 파싱 실패');
-    }
-
-    const oils = data?.RESULT?.OIL;
-    if (!Array.isArray(oils) || oils.length === 0) {
-      resultEl.innerHTML =
-        '<p class="lookup-error">조회 결과가 없습니다. 주유소 코드를 확인해주세요.</p>';
-      return;
-    }
-
-    renderStationHistory(oils);
-  } catch (e) {
-    console.warn('[OilWatch] Station lookup 실패:', e.message);
-    resultEl.innerHTML =
-      `<p class="lookup-error">조회 실패: ${e.message}</p>`;
-  }
-}
-
-function renderStationHistory(oils) {
-  const resultEl = $('lookupResult');
-
-  // 주유소명
-  const stationName = oils[0]?.OS_NM || '—';
-
-  // 날짜 목록 (내림차순 정렬, 중복 제거)
-  const dates = [...new Set(oils.map(o => o.TRADE_DT))].sort((a, b) => b.localeCompare(a));
-
-  // 유종 목록 (존재하는 것만, LOOKUP_PRODCD 순서 유지)
-  const prodcds = Object.keys(LOOKUP_PRODCD).filter(cd => oils.some(o => o.PRODCD === cd));
-
-  // date → prodcd → price 인덱스 구성
-  const idx = {};
-  oils.forEach(o => {
-    if (!idx[o.TRADE_DT]) idx[o.TRADE_DT] = {};
-    idx[o.TRADE_DT][o.PRODCD] = parseFloat((o.PRICE || '').replace(/,/g, ''));
-  });
-
-  // 가격 범위 (히트맵 색상용)
-  const allPrices = oils.map(o => parseFloat((o.PRICE || '').replace(/,/g, ''))).filter(v => !isNaN(v));
-  const minPrice = Math.min(...allPrices);
-  const maxPrice = Math.max(...allPrices);
-
-  // 유종별 마지막 가격 vs 직전 가격으로 등락 계산
-  function priceClass(cd, dateIdx) {
-    if (dateIdx >= dates.length - 1) return '';
-    const cur  = idx[dates[dateIdx]]?.[cd];
-    const prev = idx[dates[dateIdx + 1]]?.[cd];
-    if (cur == null || prev == null) return '';
-    if (cur > prev) return 'up';
-    if (cur < prev) return 'down';
-    return 'flat';
-  }
-
-  // 셀 배경 강도 (최저가 → 흰색, 최고가 → 강조)
-  function cellAlpha(price) {
-    if (isNaN(price) || maxPrice === minPrice) return 0;
-    return (price - minPrice) / (maxPrice - minPrice);
-  }
-
-  // 테이블 HTML 생성
-  const headerCols = prodcds.map(cd =>
-    `<th>${LOOKUP_PRODCD[cd]}</th>`
-  ).join('');
-
-  const bodyRows = dates.map((dt, di) => {
-    const cols = prodcds.map(cd => {
-      const price = idx[dt]?.[cd];
-      if (price == null || isNaN(price)) return '<td class="lookup-na">—</td>';
-      const cls   = priceClass(cd, di);
-      const alpha = cellAlpha(price);
-      const bg    = alpha > 0
-        ? `background:rgba(0,40,120,${(alpha * 0.12).toFixed(3)})`
-        : '';
-      return `<td class="${cls}" style="${bg}">${fmt(price, 2)}</td>`;
-    }).join('');
-    return `<tr><td class="lookup-date">${fmtLookupDate(dt)}</td>${cols}</tr>`;
-  }).join('');
-
-  resultEl.innerHTML = `
-    <div class="lookup-station-name">${stationName}</div>
-    <div class="table-wrapper">
-      <table class="data-table lookup-table">
-        <thead>
-          <tr>
-            <th>날짜</th>
-            ${headerCols}
-          </tr>
-        </thead>
-        <tbody>${bodyRows}</tbody>
-      </table>
-    </div>
-    <p class="lookup-note">단위: 원/L &nbsp;·&nbsp; 색상: 진할수록 고가 &nbsp;·&nbsp; 등락: <span class="up">▲ 상승</span> / <span class="down">▼ 하락</span></p>
-  `;
-}
-
-// 조회 버튼 이벤트
-const lookupBtn = $('lookupBtn');
-const lookupInput = $('lookupInput');
-
-if (lookupBtn && lookupInput) {
-  lookupBtn.addEventListener('click', () => {
-    const ucd = lookupInput.value.trim();
-    if (!ucd) { lookupInput.focus(); return; }
-    fetchStationHistory(ucd);
-  });
-
-  lookupInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') lookupBtn.click();
-  });
 }
 
 /* ────────────────────────────────────────────

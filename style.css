@@ -721,7 +721,7 @@ body {
 }
 
 @media (max-width: 480px) {
-  .station-grid    { grid-column: span 12; grid-template-columns: 1fr; }
+  .station-grid    { grid-template-columns: 1fr; }
   .factory-display { grid-template-columns: 1fr; }
   .product-grid    { grid-template-columns: 1fr; }
   .ticker-inner    { animation-duration: 25s; }
@@ -756,116 +756,60 @@ body {
   color: var(--text-muted);
 }
 
-/* ──────────────── STATION LOOKUP (주유소 가격 이력) ──────────────── */
-.lookup-form {
-  display: flex;
-  gap: 0.75rem;
-  margin-bottom: 1.25rem;
-  align-items: center;
-}
-
-.lookup-input {
-  flex: 1;
-  max-width: 380px;
-  height: 42px;
-  padding: 0 1rem;
-  border: 1.5px solid var(--border-bright);
-  border-radius: var(--radius);
-  font-family: var(--font-body);
-  font-size: 0.9rem;
-  color: var(--text-primary);
-  background: #fff;
-  outline: none;
-  transition: border-color var(--transition), box-shadow var(--transition);
-  letter-spacing: 0.04em;
-}
-.lookup-input::placeholder { color: var(--text-muted); }
-.lookup-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-.lookup-btn {
-  height: 42px;
-  padding: 0 1.5rem;
-  background: var(--accent);
-  border: none;
-  border-radius: var(--radius);
-  color: #fff;
-  font-family: var(--font-body);
-  font-size: 0.88rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  cursor: pointer;
-  transition: background var(--transition), box-shadow var(--transition);
-  white-space: nowrap;
-}
-.lookup-btn:hover {
-  background: var(--accent-dim);
-  box-shadow: 0 4px 12px var(--accent-glow);
-}
-.lookup-btn:active { transform: translateY(1px); }
-
-.lookup-result { min-height: 48px; }
-
-.lookup-hint,
-.lookup-loading,
-.lookup-error {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  padding: 0.5rem 0;
-}
-.lookup-error { color: #B43030; }
-.lookup-loading { color: var(--accent-dim); }
-
-.lookup-station-name {
+/* ──────────────── STATUS BADGE ──────────────── */
+.status-badge {
+  margin-left: auto;
   font-family: var(--font-display);
-  font-size: 1.5rem;
-  letter-spacing: 0.04em;
-  color: var(--text-primary);
-  margin-bottom: 0.9rem;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.lookup-station-name::before {
-  content: '';
-  display: inline-block;
-  width: 4px;
-  height: 1.3em;
-  background: var(--accent);
-  border-radius: 2px;
-  flex-shrink: 0;
-}
-
-.lookup-table th { text-align: center; }
-.lookup-table td { text-align: center; }
-
-.lookup-table .lookup-date {
-  font-family: var(--font-body) !important;
-  font-size: 0.8rem !important;
-  color: var(--text-muted) !important;
-  letter-spacing: 0.04em !important;
-  text-transform: none !important;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #F4F6F9;
+  color: var(--text-muted);
+  align-self: center;
   white-space: nowrap;
-  padding-left: 0.75rem;
-  text-align: left !important;
 }
-
-.lookup-table .lookup-na {
+.status-badge.status-live {
+  color: #007A2C;
+  border-color: rgba(0, 177, 64, 0.35);
+  background: rgba(0, 177, 64, 0.10);
+}
+.status-badge.status-stale {
+  color: #B43030;
+  border-color: rgba(180, 48, 48, 0.35);
+  background: rgba(180, 48, 48, 0.08);
+  cursor: help;
+}
+.status-badge.status-pending {
   color: var(--text-muted);
-  font-size: 0.75rem;
 }
 
-.lookup-note {
-  margin-top: 0.75rem;
-  font-size: 0.68rem;
+/* ──────────────── STATUS BADGE ──────────────── */
+.status-badge {
+  margin-left: auto;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #F4F6F9;
   color: var(--text-muted);
-  text-align: right;
-  opacity: 0.75;
+  align-self: center;
+  white-space: nowrap;
 }
-
-@media (max-width: 600px) {
-  .lookup-form { flex-wrap: wrap; }
-  .lookup-input { max-width: 100%; }
+.status-badge.status-live {
+  color: #007A2C;
+  border-color: rgba(0, 177, 64, 0.35);
+  background: rgba(0, 177, 64, 0.10);
+}
+.status-badge.status-stale {
+  color: #B43030;
+  border-color: rgba(180, 48, 48, 0.35);
+  background: rgba(180, 48, 48, 0.08);
+  cursor: help;
+}
+.status-badge.status-pending {
+  color: var(--text-muted);
 }
