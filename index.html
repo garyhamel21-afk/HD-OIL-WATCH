@@ -58,7 +58,7 @@
       <div class="card-header">
         <span class="card-tag">INTERNATIONAL</span>
         <h2 class="card-title">국제유가</h2>
-        <span class="card-unit">USD/배럴 · WTI/Brent: Stooq · Dubai: FRED (DCOILDUBBI)</span>
+        <span class="card-unit">USD/배럴 · WTI/Brent: FRED API (일별) · Dubai: Stooq DS.F (일별)</span>
       </div>
       <div class="card-body">
         <div class="price-grid price-grid--3" id="intlPriceGrid">
@@ -265,6 +265,32 @@
             <span class="fi-label">경유</span>
             <span class="fi-val" id="fact-diesel">—</span>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 8: 주유소 가격 이력 조회 -->
+    <section class="card card--full" id="sec-station-lookup">
+      <div class="card-header">
+        <span class="card-tag">STATION LOOKUP</span>
+        <h2 class="card-title">주유소 가격 이력</h2>
+        <span class="card-unit">오피넷 코드 입력 → 최근 7일 유종별 가격 · 한국석유공사 Opinet API</span>
+      </div>
+      <div class="card-body">
+        <div class="lookup-form">
+          <input
+            type="text"
+            id="lookupInput"
+            class="lookup-input"
+            placeholder="오피넷 주유소 코드 입력 (예: A0000001)"
+            maxlength="20"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button class="lookup-btn" id="lookupBtn">조회</button>
+        </div>
+        <div class="lookup-result" id="lookupResult">
+          <p class="lookup-hint">오피넷 주유소 코드를 입력하고 조회 버튼을 눌러주세요.</p>
         </div>
       </div>
     </section>
