@@ -53,12 +53,12 @@
   <!-- MAIN GRID -->
   <main class="main-grid">
 
-    <!-- SECTION 1: 국제유가 (전폭) -->
-    <section class="card card--full" id="sec-international">
+    <!-- SECTION 1: 국제유가 (환율 카드와 한 줄) -->
+    <section class="card card--wide" id="sec-international">
       <div class="card-header">
         <span class="card-tag">INTERNATIONAL</span>
         <h2 class="card-title">국제유가</h2>
-        <span class="card-unit">USD/배럴 · WTI/Brent: Stooq (일별) · Dubai: Opinet (일별)</span>
+        <span class="card-unit">USD/배럴 · WTI/Brent: Yahoo Finance (실시간) · Dubai: Opinet (일별)</span>
       </div>
       <div class="card-body">
         <div class="price-grid price-grid--3" id="intlPriceGrid">
@@ -87,8 +87,8 @@
       </div>
     </section>
 
-    <!-- SECTION 2: 국내유가 -->
-    <section class="card card--wide" id="sec-station">
+    <!-- SECTION 2: 국내유가 (비활성화) -->
+    <section class="card card--wide" id="sec-station" style="display:none">
       <div class="card-header">
         <span class="card-tag">DOMESTIC</span>
         <h2 class="card-title">국내유가</h2>
@@ -167,8 +167,8 @@
       </div>
     </section>
 
-    <!-- SECTION 4: 석유제품가 -->
-    <section class="card card--wide" id="sec-domestic">
+    <!-- SECTION 4: 석유제품가 (비활성화) -->
+    <section class="card card--wide" id="sec-domestic" style="display:none">
       <div class="card-header">
         <span class="card-tag">PRODUCT PRICE</span>
         <h2 class="card-title">석유제품가</h2>
@@ -204,15 +204,15 @@
       </div>
     </section>
 
-    <!-- SECTION 5: 주유소 평균판매가 -->
-    <section class="card" id="sec-product">
+    <!-- SECTION 5: 주유소 평균판매가 (풀너비 + 7일 차트) -->
+    <section class="card card--full" id="sec-product">
       <div class="card-header">
         <span class="card-tag">GAS STATION AVG</span>
         <h2 class="card-title">주유소 평균판매가</h2>
-        <span class="card-unit">단위: 원/L · 한국석유공사 Opinet API (avgAllPrice)</span>
+        <span class="card-unit">단위: 원/L · 한국석유공사 Opinet API · 최근 7일 추이</span>
       </div>
       <div class="card-body">
-        <div class="product-grid" id="productGrid">
+        <div class="product-grid product-grid--4" id="productGrid">
           <div class="product-card skeleton">
             <div class="product-label">고급휘발유</div>
             <div class="product-val" id="prod-premium">—</div>
@@ -234,6 +234,9 @@
             <div class="product-chg" id="prod-diesel-chg">—</div>
           </div>
         </div>
+        <div class="history-chart-wrap" id="stationChartWrap">
+          <div class="chart-skeleton">데이터를 불러오는 중…</div>
+        </div>
       </div>
     </section>
 
@@ -249,8 +252,6 @@
           <button class="ftab active" data-company="sk">SK에너지</button>
           <button class="ftab" data-company="gs">GS칼텍스</button>
           <button class="ftab" data-company="hyundai">현대오일뱅크</button>
-          <button class="ftab" data-company="soil">S-OIL</button>
-          <button class="ftab" data-company="hanwha">한화토탈</button>
         </div>
         <div class="factory-display" id="factoryDisplay">
           <div class="factory-item">

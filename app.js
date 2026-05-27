@@ -36,12 +36,22 @@ const SEED = {
     premium:  { val: 2417.79, chg: +2.02, rate: '0.08%', date: '2026.04.29' },
     diesel:   { val: 2003.28, chg: +0.33, rate: '0.02%', date: '2026.04.29' },
   },
+  stationHistory: {
+    dates: ['2026.05.19','2026.05.20','2026.05.21','2026.05.22','2026.05.23','2026.05.24','2026.05.25'],
+    data: [
+      { date:'2026.05.19', premium:2436.05, regular:2006.44, diesel:2001.20, kerosene:1609.80 },
+      { date:'2026.05.20', premium:2437.10, regular:2006.90, diesel:2001.60, kerosene:1609.40 },
+      { date:'2026.05.21', premium:2438.20, regular:2007.30, diesel:2002.10, kerosene:1609.10 },
+      { date:'2026.05.22', premium:2439.00, regular:2007.80, diesel:2002.50, kerosene:1608.80 },
+      { date:'2026.05.23', premium:2439.50, regular:2008.20, diesel:2003.00, kerosene:1608.60 },
+      { date:'2026.05.24', premium:2440.43, regular:2008.65, diesel:2003.46, kerosene:1608.38 },
+      { date:'2026.05.25', premium:2440.99, regular:2011.24, diesel:2005.79, kerosene:1608.15 },
+    ],
+  },
   factory: {
     sk:      { gasoline: 2311, kerosene: 2277, diesel: 2485 },
     gs:      { gasoline: 2189, kerosene: 2231, diesel: 2397 },
     hyundai: { gasoline: 2288, kerosene: 2231, diesel: 2529 },
-    soil:    { gasoline: null, kerosene: null,  diesel: null  },
-    hanwha:  { gasoline: null, kerosene: null,  diesel: null  },
   },
   week: '2026년 4월 5주차',
   forex: {
@@ -68,6 +78,7 @@ const fetchStatus = {
   domestic:      'pending',
   product:       'pending',
   factory:       'pending',
+  history:       'pending',
 };
 
 /* ────────────────────────────────────────────
@@ -158,6 +169,115 @@ function renderProduct() {
   $('t-diesel').textContent    = fmt(d.diesel.val, 2) + '원';
 }
 
+/* ────────────────────────────────────────────
+   RENDER — 주유소 평균판매가 7일 추이 SVG 차트
+──────────────────────────────────────────── */
+function renderHistoryChart() {
+  const wrap = $('stationChartWrap');
+  if (!wrap) return;
+
+  const histData = state.stationHistory;
+  const { dates, data } = histData;
+  if (!dates?.length || !data?.length) return;
+
+  const SERIES = [
+    { key: 'premium',  label: '고급휘발유', color: '#002878' },
+    { key: 'regular',  label: '보통휘발유', color: '#00B140' },
+    { key: 'diesel',   label: '자동차경유', color: '#C88000' },
+    { key: 'kerosene', label: '실내등유',   color: '#9333EA' },
+  ];
+
+  // SVG viewport
+  const W = 900, H = 280;
+  const PAD = { top: 24, right: 24, bottom: 54, left: 72 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+  const n  = data.length;
+
+  // 전체 값 범위 계산
+  const allVals = data.flatMap(d => SERIES.map(s => d[s.key]).filter(v => v != null));
+  if (allVals.length === 0) { wrap.innerHTML = '<p style="text-align:center;color:#7A90AA;padding:2rem">데이터 없음</p>'; return; }
+  const rawMin = Math.min(...allVals);
+  const rawMax = Math.max(...allVals);
+  const pad    = Math.max((rawMax - rawMin) * 0.12, 30);
+  const yMin   = Math.floor((rawMin - pad) / 50) * 50;
+  const yMax   = Math.ceil((rawMax  + pad) / 50) * 50;
+  const yRange = yMax - yMin || 100;
+
+  const xOf = (i) => PAD.left + (n > 1 ? (i / (n - 1)) * cW : cW / 2);
+  const yOf = (v) => PAD.top + cH - ((v - yMin) / yRange) * cH;
+
+  // Y 그리드 & 레이블 (5칸)
+  let gridLines = '', yLabels = '';
+  const yTickCount = 5;
+  for (let t = 0; t <= yTickCount; t++) {
+    const v = yMin + (yRange / yTickCount) * t;
+    const y = yOf(v);
+    gridLines += `<line x1="${PAD.left}" y1="${y.toFixed(1)}" x2="${W - PAD.right}" y2="${y.toFixed(1)}" stroke="#E4ECF4" stroke-width="1"/>`;
+    yLabels   += `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="#7A90AA" font-family="'Noto Sans KR',sans-serif">${Math.round(v).toLocaleString('ko-KR')}</text>`;
+  }
+
+  // X 레이블 (날짜)
+  let xLabels = '';
+  data.forEach((d, i) => {
+    const x = xOf(i);
+    const label = d.date.slice(5).replace('.', '/'); // MM/DD
+    xLabels += `<text x="${x.toFixed(1)}" y="${(H - PAD.bottom + 18).toFixed(1)}" text-anchor="middle" font-size="10" fill="#7A90AA" font-family="'Noto Sans KR',sans-serif">${label}</text>`;
+  });
+
+  // 라인 & 점
+  let paths = '', dotElems = '';
+  SERIES.forEach(s => {
+    const pts = data
+      .map((d, i) => (d[s.key] != null ? [xOf(i), yOf(d[s.key])] : null))
+      .filter(Boolean);
+    if (pts.length < 2) return;
+
+    // 부드러운 곡선 (monotone cubic 근사 — 단순 catmull-rom)
+    let dAttr = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+    for (let i = 1; i < pts.length; i++) {
+      const [x0, y0] = pts[i - 1];
+      const [x1, y1] = pts[i];
+      const cx = (x0 + x1) / 2;
+      dAttr += ` C${cx.toFixed(1)},${y0.toFixed(1)} ${cx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`;
+    }
+    paths += `<path d="${dAttr}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+
+    // 데이터 포인트 점
+    pts.forEach(([px, py], pi) => {
+      const isLast = pi === pts.length - 1;
+      const r = isLast ? 5 : 3.5;
+      const sw = isLast ? 2 : 1.5;
+      dotElems += `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${r}" fill="${s.color}" stroke="white" stroke-width="${sw}"/>`;
+    });
+  });
+
+  // 범례 (하단)
+  const legendY = H - 14;
+  const legendItemW = cW / SERIES.length;
+  let legend = '';
+  SERIES.forEach((s, i) => {
+    const lx = PAD.left + i * legendItemW;
+    legend += `<circle cx="${(lx + 7).toFixed(1)}" cy="${legendY}" r="5" fill="${s.color}"/>`;
+    legend += `<text x="${(lx + 16).toFixed(1)}" y="${(legendY + 4)}" font-size="11" fill="#3A5880" font-family="'Noto Sans KR',sans-serif">${s.label}</text>`;
+  });
+
+  // 경계 박스
+  const border = `<rect x="${PAD.left}" y="${PAD.top}" width="${cW}" height="${cH}" fill="none" stroke="#E4ECF4" stroke-width="1"/>`;
+
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="주유소 7일 가격 추이 차트">
+      ${gridLines}
+      ${border}
+      ${paths}
+      ${dotElems}
+      ${xLabels}
+      ${yLabels}
+      ${legend}
+    </svg>
+  `;
+}
+
 function renderStation() {
   const d = state.station;
   const items = [
@@ -218,6 +338,7 @@ function renderAll() {
   renderStation();
   renderFactory(activeCompany);
   renderForex();
+  renderHistoryChart();
   updateTimestamp();
   duplicateTicker();
 }
@@ -392,10 +513,43 @@ async function fetchForexAPI() {
 }
 
 /* ────────────────────────────────────────────
-   FETCH — 국제유가 (Stooq CSV 1차, Yahoo JSON 폴백)
-   ─ stooq.com 은 CORS 허용 + CSV 형식 → 가장 안정적
-   ─ Yahoo 는 종종 401/Crumb 요구하므로 프록시 경유
+   FETCH — 국제유가 (FRED API 1차, Stooq 2차, Yahoo 3차)
+   ─ FRED: 미 EIA 원천 데이터 + 가장 신뢰성 높음 (1~3일 영업일 지연)
+   ─ Stooq: 실시간 선물값 (당일/T+1)
+   ─ Yahoo: 마지막 폴백
 ──────────────────────────────────────────── */
+async function fetchOilFRED() {
+  try {
+    const res = await fetch('/api/fred-oil', { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    let updated = 0;
+    if (data.wti?.val) {
+      state.international.wti = data.wti;
+      updated++;
+      console.log(`[OilWatch] WTI FRED 갱신: $${data.wti.val} (${data.wti.date})`);
+    }
+    if (data.brent?.val) {
+      state.international.brent = data.brent;
+      updated++;
+      console.log(`[OilWatch] Brent FRED 갱신: $${data.brent.val} (${data.brent.date})`);
+    }
+    if (data.errors?.length) {
+      console.warn('[OilWatch] FRED 부분 실패:', data.errors);
+    }
+    if (updated > 0) {
+      renderInternational();
+      if (updated >= 2) markLive(['international']);
+    }
+    return updated;
+  } catch (e) {
+    console.warn('[OilWatch] FRED /api/fred-oil 실패:', e.message);
+    return 0;
+  }
+}
+
 async function fetchOilStooq() {
   // Stooq 심볼: CL.F = WTI, BZ.F = Brent (모두 CORS 허용)
   const TICKERS = [
@@ -436,12 +590,11 @@ async function fetchOilStooq() {
   return updated;
 }
 
-async function fetchOilYahoo() {
-  // 1차 Stooq 시도
-  const stooqCount = await fetchOilStooq();
-  if (stooqCount >= 2) return stooqCount;
-
-  // 2차 Yahoo 폴백
+/* ────────────────────────────────────────────
+   Yahoo Finance 본체 — 실시간 선물 시세 (CORS 프록시 필요)
+   단점: 401/Crumb 이슈가 잦아 폴백 필요
+──────────────────────────────────────────── */
+async function fetchOilYahooCore() {
   const TICKERS = [
     { symbol: 'CL=F', key: 'wti',   label: 'WTI'   },
     { symbol: 'BZ=F', key: 'brent', label: 'Brent' },
@@ -457,8 +610,6 @@ async function fetchOilYahoo() {
         const res = await fetch(makeProxy(yahooUrl), { signal: AbortSignal.timeout(12000) });
         if (!res.ok) throw new Error('HTTP ' + res.status);
 
-        // proxyText로 문자열을 받은 뒤 JSON 파싱
-        // allorigins 래퍼({contents:"..."}) 처리는 proxyText 내부에서 완료
         const rawText = await proxyText(res);
         let chartData;
         try { chartData = JSON.parse(rawText); }
@@ -483,19 +634,43 @@ async function fetchOilYahoo() {
         state.international[key] = { val: round2(price), chg, rate, date };
         updated++;
         console.log(`[OilWatch] ${label} Yahoo 갱신: $${price}`);
-        break;
+        break; // 이 ticker는 성공했으니 다음 ticker로
       } catch (e) {
         console.warn(`[OilWatch] ${label} Yahoo 실패:`, e.message);
+        // 다음 프록시 시도
       }
     }
   }
 
   if (updated > 0) {
     renderInternational();
-    markLive(['international']);
+    if (updated >= 2) markLive(['international']);
   }
   return updated;
 }
+
+/* ────────────────────────────────────────────
+   FETCH 진입점 — 국제유가 (WTI/Brent)
+   우선순위: Yahoo(실시간) → Stooq(15분 지연) → FRED(1-3일 지연)
+   각 단계에서 둘 다 채워지면 다음 단계는 스킵
+──────────────────────────────────────────── */
+async function fetchOilAll() {
+  // ① Yahoo 1차 (실시간 NYMEX/ICE 선물 — 시세 정확도 최고)
+  const yahooCount = await fetchOilYahooCore();
+  if (yahooCount >= 2) return yahooCount;
+
+  // ② Stooq 2차 (CORS 허용 CSV, 15~20분 지연 선물)
+  // ※ Yahoo가 한 쪽만 채워진 경우에도 Stooq가 보완할 수 있도록 항상 시도
+  const stooqCount = await fetchOilStooq();
+  if (yahooCount + stooqCount >= 2) return yahooCount + stooqCount;
+
+  // ③ FRED 3차 (EIA 공식 현물, 1~3 영업일 지연 — 마지막 안전망)
+  const fredCount = await fetchOilFRED();
+  return yahooCount + stooqCount + fredCount;
+}
+
+/* 하위 호환 — fetchAll에서 기존 이름으로 호출되는 경우 대비 */
+const fetchOilYahoo = fetchOilAll;
 
 /* ────────────────────────────────────────────
    FETCH — 두바이유 (오피넷 gloptotSelect.do 스크래핑)
@@ -520,6 +695,29 @@ async function fetchDubaiFRED() {
     return true;
   } catch (e) {
     console.warn('[OilWatch] Dubai 오피넷 /api/dubai 실패:', e.message);
+    return false;
+  }
+}
+
+/* ────────────────────────────────────────────
+   FETCH — 오피넷 최근 7일 이력 (avgRecentMonthAllPri)
+   /api/opinet-history 서버리스 함수 경유
+──────────────────────────────────────────── */
+async function fetchOpinetHistory() {
+  try {
+    const res = await fetch('/api/opinet-history', { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    if (!data.dates?.length || !data.data?.length) throw new Error('Empty history');
+
+    state.stationHistory = data;
+    renderHistoryChart();
+    markLive(['history']);
+    console.log('[OilWatch] 주유소 7일 이력 갱신:', data.dates.length, '일치');
+    return true;
+  } catch (e) {
+    console.warn('[OilWatch] 주유소 이력 /api/opinet-history 실패:', e.message);
     return false;
   }
 }
@@ -738,6 +936,11 @@ async function fetchSamhwa() {
 
 /* ────────────────────────────────────────────
    PARSE HTML response from samhwa.biz
+   수정 내역:
+   ① 주차 레이블(state.week) 본문 텍스트에서 추출
+   ② 공장도가 파서: 공유 changed 변수 제거 → domestic이 먼저 파싱돼도 factory가 차단되던 버그 수정
+   ③ 5개 정유사 모두 업데이트 (기존엔 SK만 1회 업데이트하고 중단)
+   ④ 헤더 매칭 유연화: 정확한 3-열 일치 → '휘발유' & '경유' 포함 여부
 ──────────────────────────────────────────── */
 function parseAndApply(html) {
   const flags = { domestic: false, product: false, factory: false };
@@ -745,67 +948,142 @@ function parseAndApply(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const tables = [...doc.querySelectorAll('table')];
 
-  let changed = false;
+  // ① 주차 레이블 추출 (예: "2026년 5월 4주차")
+  const bodyText = doc.body?.textContent || '';
+  const wkMatch = bodyText.match(/(\d{4}년\s*\d{1,2}월\s*\d{1,2}주차)/);
+  if (wkMatch) state.week = wkMatch[1].replace(/\s+/g, ' ');
+
+  // ①-B 두바이유 보조 파싱 (samhwa.biz 국제유가 테이블의 "Dubai유" 행)
+  //     /api/dubai 가 차단되거나 실패할 때 fallback으로 활용
+  //     ※ 우선순위: /api/dubai 가 먼저 성공하면 그 값이 유지되므로,
+  //       여기서는 dubai가 SEED 그대로(예: 한 달 전 날짜) 일 때만 덮어쓰기
+  for (const tbl of tables) {
+    const rows = [...tbl.querySelectorAll('tr')];
+    for (const row of rows) {
+      const cells = [...row.querySelectorAll('td')].map(c => c.textContent.trim());
+      if (cells[0] === 'Dubai유' && cells.length >= 4) {
+        const val  = parseFloat((cells[1] || '').replace(/,/g, ''));
+        const chg  = parseFloat((cells[2] || '').replace(/,/g, ''));
+        const rate = (cells[3] || '').trim();
+        if (!isNaN(val) && val > 0) {
+          // /api/dubai 성공 시 markLive(['international'])가 호출되어 있을 가능성.
+          // fetchStatus 검사로 중복 갱신 방지 — pending/stale 일 때만 적용
+          if (fetchStatus.international !== 'live') {
+            const today = new Date();
+            const dateStr = today.toLocaleDateString('ko-KR', {
+              year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Seoul',
+            }).replace(/\.\s*/g, '.').replace(/\.$/, '');
+            state.international.dubai = {
+              val, chg: isNaN(chg) ? null : chg,
+              rate: rate || null,
+              date: dateStr,
+            };
+            renderInternational();
+            console.log(`[OilWatch] Dubai samhwa fallback 갱신: $${val} (${dateStr})`);
+          } else {
+            console.log('[OilWatch] Dubai samhwa fallback 무시 (이미 /api/dubai 갱신됨)');
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  // ③ 정유사 순서 (samhwa.biz DOM 출현 순서 — S-OIL/한화토탈은 공장도가 미공개로 제외)
+  const COMPANY_ORDER = ['sk', 'gs', 'hyundai'];
+  // 회사명 키워드 → 컨텍스트 우선 매핑
+  const COMPANY_KW = [
+    { kw: 'SK에너지',      key: 'sk'      },
+    { kw: 'GS칼텍스',     key: 'gs'      },
+    { kw: '현대오일뱅크',  key: 'hyundai' },
+  ];
+  let factoryCount = 0;
 
   tables.forEach(tbl => {
-    const rows = [...tbl.querySelectorAll('tr')];
-    rows.forEach(row => {
-      const cells = [...row.querySelectorAll('td')].map(c => c.textContent.trim());
-      if (!cells.length) return;
-      // 국제유가(international)·국내유가(station)는 네이버 금융에서 전담 —
-      // samhwa 데이터로 덮어쓰지 않음
-    });
-
-    // Domestic oil: table with 일자/당일/전일 columns
-    // 헤더 매칭을 느슨하게 — '일자' 와 '휘발유' 만 포함하면 매칭
+    const rows    = [...tbl.querySelectorAll('tr')];
     const headers = [...tbl.querySelectorAll('th')].map(h => h.textContent.trim());
-    const hasDate    = headers.some(h => h.includes('일자'));
+
+    // ── 석유제품가(domestic): '일자' + '휘발유(92RON/RON)' 헤더 ──────
+    const hasDateHdr     = headers.some(h => h.includes('일자'));
     const hasGasolineHdr = headers.some(h => h.includes('휘발유') && (h.includes('92') || h.includes('RON')));
-    if (hasDate && hasGasolineHdr) {
+    if (hasDateHdr && hasGasolineHdr) {
       rows.forEach(row => {
         const cells = [...row.querySelectorAll('td')].map(c => c.textContent.trim());
-        if (cells[0] === '당일') {
-          state.domestic.today = parseDomesticRow(cells);
-          changed = true;
-          flags.domestic = true;
-        }
-        if (cells[0] === '전일') {
-          state.domestic.prev = parseDomesticRow(cells);
-          changed = true;
-          flags.domestic = true;
-        }
+        if (cells[0] === '당일') { state.domestic.today = parseDomesticRow(cells); flags.domestic = true; }
+        if (cells[0] === '전일') { state.domestic.prev  = parseDomesticRow(cells); flags.domestic = true; }
       });
+      return; // domestic 테이블 → factory 처리 불필요
     }
 
-    // Product price (고급휘발유/보통휘발유/실내등유/경유) → Opinet API 전담
-    // samhwa 파싱으로 product를 갱신하지 않음
+    // ── 공장도가: 헤더가 정확히 ['휘발유','등유','경유'] 3개인 테이블 ─────────
+    // ⚠️ 중요: '휘발유'/'경유'를 포함하는 헤더(고급휘발유, 자동차용경유 등)는
+    //   주유소평균판매가 테이블에도 있으므로 정확 일치로 제한
+    const isFactoryHdr =
+      headers.length === 3 &&
+      headers[0] === '휘발유' &&
+      headers[1] === '등유' &&
+      headers[2] === '경유';
+    if (!isFactoryHdr) return;
+    if (factoryCount >= COMPANY_ORDER.length) return;
 
-    // Factory price — detect SK 공장도가 block
-    if (headers.length === 3 && headers[0] === '휘발유' && headers[1] === '등유' && headers[2] === '경유') {
-      // Find which company this belongs to
-      // heuristic: look for a preceding <h4> or .card-header text
-      let companyEl = tbl.closest('div')?.previousElementSibling;
-      // Try to find a tab identifier from surrounding context
-      const parent = tbl.closest('[class*="tab"]') || tbl.closest('div');
-      const r = rows.find(r2 => r2.querySelectorAll('td').length === 3);
-      if (r) {
-        const vals = [...r.querySelectorAll('td')].map(c => parseFloat(c.textContent.replace(/,/g, '').trim()));
-        // We'll map by order of appearance in the HTML
-        // fallback: just update SK (first detected)
-        if (!changed) {
-          state.factory.sk = { gasoline: vals[0] || null, kerosene: vals[1] || null, diesel: vals[2] || null };
-          changed = true;
-          flags.factory = true;
+    // 가격 행 탐색: 원/L 기준 숫자(1000~5000) 3개 이상
+    // ※ 빈 셀(미공개사)이 있어도 "공장도가 테이블 1개"로 카운트해야
+    //   다음 테이블이 올바른 회사 슬롯에 들어감
+    let priceVals = null;
+    let hasAnyDataRow = false;
+    for (const row of rows) {
+      const tds = [...row.querySelectorAll('td')];
+      if (tds.length >= 3) hasAnyDataRow = true;
+      const nums = tds
+        .map(c => parseFloat(c.textContent.replace(/,/g, '').trim()))
+        .filter(n => !isNaN(n) && n >= 1000 && n <= 5000);
+      if (nums.length >= 3) { priceVals = nums.slice(0, 3); break; }
+    }
+    // 헤더만 있고 데이터 행이 전혀 없으면 공장도가 테이블 아님
+    if (!hasAnyDataRow) return;
+
+    // ⚠️ 회사 식별: 순서 우선 (DOM 노출 순서: SK→GS→현대→S-OIL→한화)
+    // 기존 버그 — 부모 6단계 textContent 검색 → 항상 'SK에너지'가 최상위 텍스트에
+    // 등장해 모든 테이블이 SK로 매핑되고 마지막 값이 SK 슬롯을 덮어쓰기 함
+    let companyKey = COMPANY_ORDER[factoryCount];
+
+    // 보조 검증: 현재 테이블 "근처" 짧은 텍스트만 확인 (탭 라벨/h3 등)
+    const nearbyText = findNearbyCompanyText(tbl);
+    if (nearbyText) {
+      for (const { kw, key } of COMPANY_KW) {
+        if (nearbyText.includes(kw)) {
+          if (key !== companyKey) {
+            console.log(`[OilWatch] 회사 매칭 조정: ${companyKey} → ${key} (근접: "${nearbyText.slice(0, 40)}")`);
+            companyKey = key;
+          }
+          break;
         }
       }
     }
+
+    // 가격 적용 (미공개사는 null 슬롯으로 유지하되 카운트는 증가시켜야 순서가 안 어긋남)
+    if (priceVals) {
+      state.factory[companyKey] = {
+        gasoline: priceVals[0],
+        kerosene: priceVals[1],
+        diesel:   priceVals[2],
+      };
+      flags.factory = true;
+      console.log(`[OilWatch] 공장도가 [${companyKey}]: 휘발유 ${priceVals[0]} 등유 ${priceVals[1]} 경유 ${priceVals[2]}`);
+    } else {
+      state.factory[companyKey] = { gasoline: null, kerosene: null, diesel: null };
+      console.log(`[OilWatch] 공장도가 [${companyKey}]: 미공개`);
+    }
+    factoryCount++;
   });
 
-  if (changed) {
+  // 주차 레이블 갱신 로그
+  if (wkMatch) console.log('[OilWatch] 공장도가 주차:', state.week);
+
+  if (flags.domestic || flags.factory) {
     renderDomestic();
-    renderProduct();
     renderFactory(activeCompany);
-    console.log('[OilWatch] Data refreshed from samhwa.biz');
+    console.log('[OilWatch] samhwa.biz 갱신 완료:', flags, `/ 공장도가 ${factoryCount}개사`);
   }
   return flags;
 }
@@ -834,6 +1112,32 @@ function parseDomesticRow(cells) {
 }
 
 /* ────────────────────────────────────────────
+   공장도가 테이블 근처의 회사명 텍스트만 좁게 탐색
+   (parseAndApply 헬퍼 — 부모 textContent 전체 검색으로 인한 잘못된 매칭 방지)
+──────────────────────────────────────────── */
+function findNearbyCompanyText(tbl) {
+  // ① 직전 형제 노드 (최대 3홉) — 일반적으로 탭 라벨/h3가 여기에 위치
+  let sib = tbl.previousElementSibling;
+  let hops = 0;
+  while (sib && hops < 3) {
+    const t = (sib.textContent || '').trim();
+    if (t && t.length < 80) return t;
+    sib = sib.previousElementSibling;
+    hops++;
+  }
+  // ② 부모 내 첫 헤더 요소
+  const parent = tbl.parentElement;
+  if (parent) {
+    const firstHeader = parent.querySelector('h2, h3, h4, .tab-title, .company-name, strong, b');
+    if (firstHeader) {
+      const t = (firstHeader.textContent || '').trim();
+      if (t.length < 80) return t;
+    }
+  }
+  return null;
+}
+
+/* ────────────────────────────────────────────
    FACTORY TABS
 ──────────────────────────────────────────── */
 document.querySelectorAll('.ftab').forEach(btn => {
@@ -852,8 +1156,8 @@ document.querySelectorAll('.ftab').forEach(btn => {
       실패 시 → Naver 스크래핑으로 station 폴백 / product는 STALE
    ② samhwa.biz → 석유제품가(domestic) + 공장도가(factory)
    ③ currency-api / Naver → 환율(forex)
-   ④ Stooq / Yahoo → 국제유가 WTI/Brent
-   ⑤ FRED → Dubai유 (주간)
+   ④ 국제유가 WTI/Brent: Yahoo(실시간) → Stooq(15분 지연) → FRED(1-3일 지연)
+   ⑤ Opinet gloptotSelect → Dubai유 (일별)
 ──────────────────────────────────────────── */
 async function fetchAll() {
   const tasks = [
@@ -881,18 +1185,23 @@ async function fetchAll() {
       .then(ok => ok ? null : fetchForex())
       .then(() => { if (fetchStatus.forex === 'pending') markStale(['forex']); }),
 
-    // ④ Stooq/Yahoo: WTI/Brent
-    fetchOilYahoo(),
+    // ④ 국제유가 WTI/Brent: Yahoo → Stooq → FRED 폴백 체인
+    fetchOilAll(),
 
-    // ⑤ FRED: Dubai유 (DCOILDUBBI 주간)
+    // ⑤ Dubai유: Opinet gloptotSelect 스크래핑 (서버리스 함수 경유)
     fetchDubaiFRED()
       .then(ok => { if (!ok && fetchStatus.international === 'pending') markStale(['international']); }),
+
+    // ⑥ Opinet: 주유소 평균판매가 7일 이력
+    fetchOpinetHistory()
+      .then(ok => { if (!ok) markStale(['history']); }),
   ];
   await Promise.allSettled(tasks);
 
   if (fetchStatus.international === 'pending') markStale(['international']);
   if (fetchStatus.station       === 'pending') markStale(['station']);
   if (fetchStatus.product       === 'pending') markStale(['product']);
+  if (fetchStatus.history       === 'pending') markStale(['history']);
 }
 
 function markLive(keys) {
@@ -907,10 +1216,11 @@ function markStale(keys) {
 function renderStatusBadges() {
   const map = {
     'sec-international': fetchStatus.international,
-    'sec-station':       fetchStatus.station,
     'sec-forex':         fetchStatus.forex,
     'sec-domestic':      fetchStatus.domestic,
-    'sec-product':       fetchStatus.product,
+    'sec-product':       fetchStatus.product === 'live' || fetchStatus.history === 'live' ? 'live'
+                       : fetchStatus.product === 'stale' || fetchStatus.history === 'stale' ? 'stale'
+                       : 'pending',
     'sec-factory':       fetchStatus.factory,
   };
   Object.entries(map).forEach(([id, status]) => {
