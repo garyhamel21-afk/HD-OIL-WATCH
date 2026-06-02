@@ -1,102 +1,126 @@
-/**
- * Vercel Serverless — Dubai 두바이유 (오피넷 gloptotSelect.do 스크래핑)
- * 오피넷 원유 조회 페이지에서 최신 두바이 현물 가격(USD/Barrel)을 추출
- *
- * 소스: https://www.opinet.co.kr/gloptotSelect.do
- * 조사주기: 화~토 (T+1일 조사), 단위: USD/Barrel
- */
+// Vercel Serverless Function: /api/dubai
+// 두바이유 가격 스크래핑 — 오피넷 국제유가 페이지
+// 소스: https://www.opinet.co.kr/gloptotSelect.do
+// 응답: { val, chg, rate, date }
+//
+// 페이지의 데이터 테이블 구조 (최근 2일 데이터, 8행):
+//   | 기간        | Dubai  | Brent  | WTI    |
+//   | 26년05월21일 | 984.72 | 974.09 | 914.93 |  ← 원/L 환산
+//   | 26년05월22일 | 983.61 | 979.17 | 913.53 |  ← 원/L 환산
+//   | 26년05월21일 | 103.70 | 102.58 | 96.35  |  ← $/Bbl (우리가 원하는 값)
+//   | 26년05월22일 | 104.01 | 103.54 | 96.60  |  ← $/Bbl 최신값
+//
+// 구분 방법: Dubai 값이 100 이상이면 $/Bbl, 800 이상이면 원/L
+// (배럴당 두바이유 가격은 보통 $40-$150, 원/L는 약 700-1500원)
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200');
 
   try {
-    const response = await fetch('https://www.opinet.co.kr/gloptotSelect.do', {
+    const r = await fetch('https://www.opinet.co.kr/gloptotSelect.do', {
+      signal: AbortSignal.timeout(10000),
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-          '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
-        Referer: 'https://www.opinet.co.kr/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://www.opinet.co.kr/',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Upgrade-Insecure-Requests': '1',
       },
-      signal: AbortSignal.timeout(12000),
     });
 
-    if (!response.ok) throw new Error(`Opinet HTTP ${response.status}`);
-
-    const buffer = await response.arrayBuffer();
-
-    // 오피넷은 EUC-KR 인코딩 사용
-    let text;
-    try {
-      text = new TextDecoder('euc-kr').decode(buffer);
-    } catch {
-      text = new TextDecoder('utf-8').decode(buffer);
+    if (!r.ok) {
+      return res.status(502).json({ error: `Opinet HTTP ${r.status}` });
     }
 
-    // 테이블 행 파싱
-    // 각 <tr> 에서 <td> 셀을 추출, 4개 이상인 행만 처리
-    const rows = [];
-    const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-    let rowM;
+    const html = await r.text();
 
-    while ((rowM = rowRe.exec(text)) !== null) {
-      const rowHtml = rowM[1];
+    // 테이블 행 추출 — <tr>...<td>날짜</td><td>Dubai</td><td>Brent</td><td>WTI</td></tr>
+    // 정규식으로 <tr>...</tr> 단위로 분리한 뒤 각 행의 <td> 값 추출
+    const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    const cellRegex = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+
+    // 결과 누적: { dateStr: dubaiUSD }
+    // 같은 날짜가 두 번 나오므로(원화/달러) 달러값만 채택 → 가장 최근 달러 값을 마지막에 유지
+    const dollarRows = []; // [{ dateRaw, dubai, brent, wti }]
+
+    let mRow;
+    while ((mRow = rowRegex.exec(html)) !== null) {
+      const rowHtml = mRow[1];
       const cells = [];
-      const cellRe = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-      let cellM;
-      while ((cellM = cellRe.exec(rowHtml)) !== null) {
-        // HTML 태그 제거, 공백 정리
-        cells.push(cellM[1].replace(/<[^>]*>/g, '').replace(/&nbsp;/g, '').trim());
+      let mCell;
+      cellRegex.lastIndex = 0;
+      while ((mCell = cellRegex.exec(rowHtml)) !== null) {
+        // 태그 제거 + 공백 정리
+        const txt = mCell[1]
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .trim();
+        cells.push(txt);
       }
 
-      if (cells.length < 4) continue;
+      // 데이터 행 기준: 정확히 4개 셀이며 첫 셀이 날짜 형식("26년05월22일")
+      if (cells.length !== 4) continue;
+      const dateRaw = cells[0];
+      if (!/\d{2}년\d{2}월\d{2}일/.test(dateRaw)) continue;
 
-      const dubaiRaw = parseFloat(cells[1].replace(/,/g, ''));
-      if (isNaN(dubaiRaw)) continue;
+      const dubai = parseFloat(cells[1].replace(/,/g, ''));
+      const brent = parseFloat(cells[2].replace(/,/g, ''));
+      const wti   = parseFloat(cells[3].replace(/,/g, ''));
+      if (isNaN(dubai)) continue;
 
-      // USD 행 판별: 두바이 USD/배럴은 보통 50~300 범위
-      // KRW/배럴 환산값은 600~1500 범위로 구분 가능
-      if (dubaiRaw >= 500) continue;
-
-      rows.push({
-        dateRaw: cells[0],
-        dubai: dubaiRaw,
-        brent: parseFloat(cells[2].replace(/,/g, '')) || null,
-        wti:   parseFloat(cells[3].replace(/,/g, '')) || null,
-      });
+      // 달러 행만 채택하되, 0 값은 제외
+      // ── 0 제외 이유: 두바이유는 현물이라 휴장일(일/월 등)엔 값이 0으로 발행됨
+      //    (선물인 Brent/WTI는 0이 아니어도 Dubai만 0인 날이 존재)
+      //    조사주기 화~토, T+1 발행 → 일요일자 등은 0 → 직전 유효일 값을 써야 함
+      // ── 500 미만: $/Bbl 행만 ($/Bbl 보통 40~150, 원/L 환산값은 700~1500)
+      if (dubai > 0 && dubai < 500) {
+        dollarRows.push({ dateRaw, dubai, brent, wti });
+      }
     }
 
-    if (rows.length === 0) throw new Error('두바이 가격 데이터 파싱 실패');
+    if (dollarRows.length === 0) {
+      return res.status(502).json({ error: '두바이유 데이터 행을 찾지 못함' });
+    }
 
-    // 가장 최신 행 (마지막)
-    const latest = rows[rows.length - 1];
-    const prev   = rows.length > 1 ? rows[rows.length - 2] : null;
-
-    // 날짜 변환: "26년05월12일" (EUC-KR 깨짐 가능) → "2026.05.12"
-    // 한글 자리가 깨져도 숫자는 ASCII이므로 숫자만 추출
-    const parseDate = (s) => {
-      const m = s.match(/(\d{2})\D+(\d{2})\D+(\d{2})/);
-      return m ? `20${m[1]}.${m[2]}.${m[3]}` : s;
+    // 날짜 형식: "26년05월22일" → "2026.05.22" 변환 후 정렬해 최신 선택
+    const parseDateStr = (s) => {
+      const m = s.match(/(\d{2})년(\d{2})월(\d{2})일/);
+      if (!m) return null;
+      return `20${m[1]}.${m[2]}.${m[3]}`;
     };
 
-    const chg  = prev != null ? parseFloat((latest.dubai - prev.dubai).toFixed(2)) : null;
-    const rate = (prev != null && prev.dubai)
-      ? ((latest.dubai - prev.dubai) / prev.dubai * 100).toFixed(2) + '%'
-      : null;
+    // 입력 순서가 시간순(오래된 것 → 최신)이라 마지막이 최신
+    // 안전을 위해 명시적으로 날짜 기준 정렬
+    dollarRows.sort((a, b) => {
+      const da = parseDateStr(a.dateRaw) || '';
+      const db = parseDateStr(b.dateRaw) || '';
+      return da.localeCompare(db);
+    });
 
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Cache-Control', 's-maxage=1800, stale-while-revalidate=300');
-    res.status(200).json({
-      val:  latest.dubai,
+    const last = dollarRows[dollarRows.length - 1];
+    const prev = dollarRows.length >= 2 ? dollarRows[dollarRows.length - 2] : null;
+
+    const val = last.dubai;
+    const chg = prev ? Math.round((val - prev.dubai) * 100) / 100 : null;
+    const rate = (prev && prev.dubai)
+      ? ((val - prev.dubai) / prev.dubai * 100).toFixed(2) + '%'
+      : null;
+    const date = parseDateStr(last.dateRaw);
+
+    return res.status(200).json({
+      val,
       chg,
       rate,
-      date: parseDate(latest.dateRaw),
+      date,
+      source: 'opinet:gloptotSelect',
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (e) {
+    return res.status(500).json({ error: 'Fetch failed: ' + (e.message || String(e)) });
   }
 }
