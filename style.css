@@ -762,64 +762,6 @@
     color: var(--text-muted);
   }
   
-  /* ──────────────── HISTORY CHART (주유소 7일 추이) ──────────────── */
-  .chart-toolbar {
-    display: flex;
-    gap: 0.4rem;
-    margin-top: 0.5rem;
-    margin-bottom: 0.5rem;
-    justify-content: flex-end;
-  }
-  
-  .chart-mode-btn {
-    appearance: none;
-    background: #ffffff;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0.35rem 0.9rem;
-    font-family: inherit;
-    font-size: 0.72rem;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-    letter-spacing: -0.01em;
-  }
-  
-  .chart-mode-btn:hover {
-    border-color: var(--accent, #00A651);
-    color: var(--accent, #00A651);
-  }
-  
-  .chart-mode-btn.active {
-    background: var(--accent, #00A651);
-    border-color: var(--accent, #00A651);
-    color: #fff;
-  }
-  
-  .history-chart-wrap {
-    margin-top: 0.25rem;
-    background: #F8FAFB;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.25rem 1.5rem 0.75rem;
-    overflow: hidden;
-  }
-  
-  .chart-skeleton {
-    height: 200px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    animation: shimmer 1.5s ease infinite;
-  }
-  
-  .history-chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
-  
-  /* Chart legend (rendered via SVG, these classes are referenced in SVG text) */
-  .chart-legend-item { font-size: 0.72rem; color: var(--text-secondary); }
-  
   /* Responsive adjustments */
   @media (max-width: 900px) {
     .product-grid--4 { grid-template-columns: repeat(2, 1fr); }

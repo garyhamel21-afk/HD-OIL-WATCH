@@ -36,25 +36,12 @@ const SEED = {
     premium:  { val: 2417.79, chg: +2.02, rate: '0.08%', date: '2026.04.29' },
     diesel:   { val: 2003.28, chg: +0.33, rate: '0.02%', date: '2026.04.29' },
   },
-  stationHistory: {
-    dates: ['2026.05.19','2026.05.20','2026.05.21','2026.05.22','2026.05.23','2026.05.24','2026.05.25'],
-    data: [
-      { date:'2026.05.19', premium:2436.05, regular:2006.44, diesel:2001.20, kerosene:1609.80 },
-      { date:'2026.05.20', premium:2437.10, regular:2006.90, diesel:2001.60, kerosene:1609.40 },
-      { date:'2026.05.21', premium:2438.20, regular:2007.30, diesel:2002.10, kerosene:1609.10 },
-      { date:'2026.05.22', premium:2439.00, regular:2007.80, diesel:2002.50, kerosene:1608.80 },
-      { date:'2026.05.23', premium:2439.50, regular:2008.20, diesel:2003.00, kerosene:1608.60 },
-      { date:'2026.05.24', premium:2440.43, regular:2008.65, diesel:2003.46, kerosene:1608.38 },
-      { date:'2026.05.25', premium:2440.99, regular:2011.24, diesel:2005.79, kerosene:1608.15 },
-    ],
-  },
   factory: {
     sk:      { gasoline: 2311, kerosene: 2277, diesel: 2485 },
     gs:      { gasoline: 2189, kerosene: 2231, diesel: 2397 },
     hyundai: { gasoline: 2288, kerosene: 2231, diesel: 2529 },
   },
   week: '2026년 4월 5주차',
-  chartMode: 'absolute',  // 'absolute' | 'relative' — 차트 표시 모드
   forex: {
     usd: { val: 1478.40, chg: +3.90 },
     eur: { val: 1730.50, chg: +2.75 },
@@ -79,7 +66,6 @@ const fetchStatus = {
   domestic:      'pending',
   product:       'pending',
   factory:       'pending',
-  history:       'pending',
 };
 
 /* ────────────────────────────────────────────
@@ -170,173 +156,6 @@ function renderProduct() {
   $('t-diesel').textContent    = fmt(d.diesel.val, 2) + '원';
 }
 
-/* ────────────────────────────────────────────
-   RENDER — 주유소 평균판매가 7일 추이 SVG 차트
-──────────────────────────────────────────── */
-function renderHistoryChart() {
-  const wrap = $('stationChartWrap');
-  if (!wrap) return;
-
-  const histData = state.stationHistory;
-  const { dates, data } = histData;
-  if (!dates?.length || !data?.length) return;
-
-  const SERIES = [
-    { key: 'premium',  label: '고급휘발유', color: '#002878' },
-    { key: 'regular',  label: '보통휘발유', color: '#00B140' },
-    { key: 'diesel',   label: '자동차경유', color: '#C88000' },
-    { key: 'kerosene', label: '실내등유',   color: '#9333EA' },
-  ];
-
-  // 모드별 데이터 변환
-  // absolute: 원본 값(원/L) 그대로
-  // relative: 첫 날 대비 변화율(%) — (val - base) / base * 100
-  const mode = state.chartMode || 'absolute';
-  const transformed = data.map((d, i) => {
-    const row = { date: d.date };
-    SERIES.forEach(s => {
-      const v = d[s.key];
-      if (v == null) { row[s.key] = null; return; }
-      if (mode === 'relative') {
-        const base = data[0][s.key];
-        if (base == null || base === 0) { row[s.key] = null; return; }
-        row[s.key] = ((v - base) / base) * 100;
-      } else {
-        row[s.key] = v;
-      }
-    });
-    return row;
-  });
-
-  // SVG viewport
-  const W = 900, H = 280;
-  const PAD = { top: 24, right: 24, bottom: 54, left: 72 };
-  const cW = W - PAD.left - PAD.right;
-  const cH = H - PAD.top - PAD.bottom;
-  const n  = transformed.length;
-
-  // 전체 값 범위 계산
-  const allVals = transformed.flatMap(d => SERIES.map(s => d[s.key]).filter(v => v != null));
-  if (allVals.length === 0) { wrap.innerHTML = '<p style="text-align:center;color:#7A90AA;padding:2rem">데이터 없음</p>'; return; }
-  const rawMin = Math.min(...allVals);
-  const rawMax = Math.max(...allVals);
-
-  // 모드별 Y축 스케일 처리
-  // absolute: 50원 단위 라운딩 + 12% 패딩
-  // relative: 0%이 항상 보이도록 0을 포함시키고, 0.1% 단위 라운딩 + 25% 패딩
-  //          (변동폭이 매우 작을 때(±0.05% 등) 최소 ±0.1% 범위 보장)
-  let yMin, yMax;
-  if (mode === 'relative') {
-    const includeZero = (lo, hi) => [Math.min(lo, 0), Math.max(hi, 0)];
-    const [lo0, hi0] = includeZero(rawMin, rawMax);
-    const span0 = Math.max(hi0 - lo0, 0.2); // 최소 0.2%p 보장
-    const pad   = span0 * 0.25;
-    yMin = Math.floor((lo0 - pad) * 10) / 10;
-    yMax = Math.ceil ((hi0 + pad) * 10) / 10;
-  } else {
-    const pad = Math.max((rawMax - rawMin) * 0.12, 30);
-    yMin = Math.floor((rawMin - pad) / 50) * 50;
-    yMax = Math.ceil ((rawMax + pad) / 50) * 50;
-  }
-  const yRange = yMax - yMin || 1;
-
-  const xOf = (i) => PAD.left + (n > 1 ? (i / (n - 1)) * cW : cW / 2);
-  const yOf = (v) => PAD.top + cH - ((v - yMin) / yRange) * cH;
-
-  // 값 포맷 헬퍼
-  const fmtY = (v) => {
-    if (mode === 'relative') {
-      const sign = v > 0 ? '+' : '';
-      return `${sign}${v.toFixed(2)}%`;
-    }
-    return Math.round(v).toLocaleString('ko-KR');
-  };
-
-  // Y 그리드 & 레이블 (5칸)
-  let gridLines = '', yLabels = '';
-  const yTickCount = 5;
-  for (let t = 0; t <= yTickCount; t++) {
-    const v = yMin + (yRange / yTickCount) * t;
-    const y = yOf(v);
-    gridLines += `<line x1="${PAD.left}" y1="${y.toFixed(1)}" x2="${W - PAD.right}" y2="${y.toFixed(1)}" stroke="#E4ECF4" stroke-width="1"/>`;
-    yLabels   += `<text x="${PAD.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="#7A90AA" font-family="'Noto Sans KR',sans-serif">${fmtY(v)}</text>`;
-  }
-
-  // 변화율 모드에서 0% 기준선 강조
-  let zeroLine = '';
-  if (mode === 'relative' && yMin <= 0 && yMax >= 0) {
-    const y0 = yOf(0);
-    zeroLine = `<line x1="${PAD.left}" y1="${y0.toFixed(1)}" x2="${W - PAD.right}" y2="${y0.toFixed(1)}" stroke="#7A90AA" stroke-width="1" stroke-dasharray="4,3"/>`;
-  }
-
-  // X 레이블 (날짜)
-  let xLabels = '';
-  transformed.forEach((d, i) => {
-    const x = xOf(i);
-    const label = d.date.slice(5).replace('.', '/'); // MM/DD
-    xLabels += `<text x="${x.toFixed(1)}" y="${(H - PAD.bottom + 18).toFixed(1)}" text-anchor="middle" font-size="10" fill="#7A90AA" font-family="'Noto Sans KR',sans-serif">${label}</text>`;
-  });
-
-  // 라인 & 점
-  let paths = '', dotElems = '';
-  SERIES.forEach(s => {
-    const pts = transformed
-      .map((d, i) => (d[s.key] != null ? [xOf(i), yOf(d[s.key])] : null))
-      .filter(Boolean);
-    if (pts.length < 2) return;
-
-    // 부드러운 곡선 (monotone cubic 근사 — 단순 catmull-rom)
-    let dAttr = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
-    for (let i = 1; i < pts.length; i++) {
-      const [x0, y0] = pts[i - 1];
-      const [x1, y1] = pts[i];
-      const cx = (x0 + x1) / 2;
-      dAttr += ` C${cx.toFixed(1)},${y0.toFixed(1)} ${cx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`;
-    }
-    paths += `<path d="${dAttr}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
-
-    // 데이터 포인트 점
-    pts.forEach(([px, py], pi) => {
-      const isLast = pi === pts.length - 1;
-      const r = isLast ? 5 : 3.5;
-      const sw = isLast ? 2 : 1.5;
-      dotElems += `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="${r}" fill="${s.color}" stroke="white" stroke-width="${sw}"/>`;
-    });
-  });
-
-  // 범례 (하단)
-  const legendY = H - 14;
-  const legendItemW = cW / SERIES.length;
-  let legend = '';
-  SERIES.forEach((s, i) => {
-    const lx = PAD.left + i * legendItemW;
-    legend += `<circle cx="${(lx + 7).toFixed(1)}" cy="${legendY}" r="5" fill="${s.color}"/>`;
-    legend += `<text x="${(lx + 16).toFixed(1)}" y="${(legendY + 4)}" font-size="11" fill="#3A5880" font-family="'Noto Sans KR',sans-serif">${s.label}</text>`;
-  });
-
-  // 경계 박스
-  const border = `<rect x="${PAD.left}" y="${PAD.top}" width="${cW}" height="${cH}" fill="none" stroke="#E4ECF4" stroke-width="1"/>`;
-
-  // 변화율 모드 안내 (X축 첫 날짜 위에 기준 표시)
-  let baselineLabel = '';
-  if (mode === 'relative' && transformed[0]) {
-    baselineLabel = `<text x="${(PAD.left + 4).toFixed(1)}" y="${(PAD.top + 14).toFixed(1)}" font-size="10" fill="#7A90AA" font-family="'Noto Sans KR',sans-serif">기준일: ${transformed[0].date}</text>`;
-  }
-
-  wrap.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="주유소 7일 가격 추이 차트">
-      ${gridLines}
-      ${zeroLine}
-      ${border}
-      ${baselineLabel}
-      ${paths}
-      ${dotElems}
-      ${xLabels}
-      ${yLabels}
-      ${legend}
-    </svg>
-  `;
-}
 
 function renderStation() {
   const d = state.station;
@@ -398,7 +217,6 @@ function renderAll() {
   renderStation();
   renderFactory(activeCompany);
   renderForex();
-  renderHistoryChart();
   updateTimestamp();
   duplicateTicker();
 }
@@ -755,39 +573,6 @@ async function fetchDubaiFRED() {
     return true;
   } catch (e) {
     console.warn('[OilWatch] Dubai 오피넷 /api/dubai 실패:', e.message);
-    return false;
-  }
-}
-
-/* ────────────────────────────────────────────
-   FETCH — 오피넷 최근 7일 이력 (avgRecentMonthAllPri)
-   /api/opinet-history 서버리스 함수 경유
-──────────────────────────────────────────── */
-async function fetchOpinetHistory() {
-  try {
-    const res = await fetch('/api/opinet-history', { signal: AbortSignal.timeout(15000) });
-    // 함수가 200 + {error,stage} 형태로 진단을 돌려주므로 status보다 body를 우선 확인
-    let data;
-    try {
-      data = await res.json();
-    } catch (parseErr) {
-      // JSON이 아닌 응답(예: Vercel 500 HTML 페이지, 404 텍스트)
-      throw new Error(`응답이 JSON 아님 (HTTP ${res.status})`);
-    }
-    if (data.error) {
-      // 서버리스 함수가 보내준 진단 정보를 그대로 노출
-      console.warn('[OilWatch] 이력 API 진단:', JSON.stringify(data));
-      throw new Error(`${data.error}${data.stage ? ` [${data.stage}]` : ''}`);
-    }
-    if (!data.dates?.length || !data.data?.length) throw new Error('Empty history');
-
-    state.stationHistory = data;
-    renderHistoryChart();
-    markLive(['history']);
-    console.log('[OilWatch] 주유소 7일 이력 갱신:', data.dates.length, '일치 (', data.dates[0], '~', data.dates[data.dates.length - 1], ')');
-    return true;
-  } catch (e) {
-    console.warn('[OilWatch] 주유소 이력 /api/opinet-history 실패:', e.message);
     return false;
   }
 }
@@ -1220,20 +1005,6 @@ document.querySelectorAll('.ftab').forEach(btn => {
 });
 
 /* ────────────────────────────────────────────
-   CHART MODE TOGGLE (절대값 / 변화율)
-──────────────────────────────────────────── */
-document.querySelectorAll('.chart-mode-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const mode = btn.dataset.mode;
-    if (!mode || state.chartMode === mode) return;
-    document.querySelectorAll('.chart-mode-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    state.chartMode = mode;
-    renderHistoryChart();
-  });
-});
-
-/* ────────────────────────────────────────────
    FETCH ORCHESTRATOR
    우선순위:
    ① Opinet API → 국내유가(station) + 주유소 평균판매가(product)
@@ -1275,17 +1046,12 @@ async function fetchAll() {
     // ⑤ Dubai유: Opinet gloptotSelect 스크래핑 (서버리스 함수 경유)
     fetchDubaiFRED()
       .then(ok => { if (!ok && fetchStatus.international === 'pending') markStale(['international']); }),
-
-    // ⑥ Opinet: 주유소 평균판매가 7일 이력
-    fetchOpinetHistory()
-      .then(ok => { if (!ok) markStale(['history']); }),
   ];
   await Promise.allSettled(tasks);
 
   if (fetchStatus.international === 'pending') markStale(['international']);
   if (fetchStatus.station       === 'pending') markStale(['station']);
   if (fetchStatus.product       === 'pending') markStale(['product']);
-  if (fetchStatus.history       === 'pending') markStale(['history']);
 }
 
 function markLive(keys) {
@@ -1302,9 +1068,7 @@ function renderStatusBadges() {
     'sec-international': fetchStatus.international,
     'sec-forex':         fetchStatus.forex,
     'sec-domestic':      fetchStatus.domestic,
-    'sec-product':       fetchStatus.product === 'live' || fetchStatus.history === 'live' ? 'live'
-                       : fetchStatus.product === 'stale' || fetchStatus.history === 'stale' ? 'stale'
-                       : 'pending',
+    'sec-product':       fetchStatus.product,
     'sec-factory':       fetchStatus.factory,
   };
   Object.entries(map).forEach(([id, status]) => {
@@ -1367,8 +1131,6 @@ async function autoRefresh() {
 window.OilWatch = {
   get state() { return state; },
   fetchAll,
-  fetchOpinetHistory,
-  renderHistoryChart,
   renderAll,
 };
 
